@@ -712,7 +712,8 @@ namespace Rem.UI
                 string dir = txtDir.Text.Trim();
                 if (dir.Length == 0) dir = DefaultSaveDir();
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                System.Diagnostics.Process.Start("explorer.exe", dir);
+                // using 只为及时释放进程对象句柄：explorer 是独立进程，Dispose 不会影响它的运行
+                using (System.Diagnostics.Process p = System.Diagnostics.Process.Start("explorer.exe", dir)) { }
             }
             catch (Exception ex)
             {

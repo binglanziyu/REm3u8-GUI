@@ -172,7 +172,7 @@ namespace Rem.UI
             ToolStripMenuItem open = new ToolStripMenuItem("打开引擎目录");
             open.Click += delegate (object s, EventArgs e)
             {
-                try { System.Diagnostics.Process.Start("explorer.exe", AppPaths.EngineDir); }
+                try { using (Process p = Process.Start("explorer.exe", AppPaths.EngineDir)) { } }
                 catch (Exception __ex) { Note.Swallow("MainForm.cs:664", __ex); }
             };
             menu.Items.Add(open);
@@ -373,7 +373,7 @@ namespace Rem.UI
             if (string.IsNullOrEmpty(url)) return;
             try
             {
-                Process.Start(url);
+                using (Process p = Process.Start(url)) { }
                 SetStatus("已在浏览器打开发布页，请下载最新 REM-GUI.exe", Theme.AccentLight);
                 log.Info(">> 已打开发布页：" + url);
             }
