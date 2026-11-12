@@ -506,7 +506,7 @@ namespace Rem.Tests
                 UpdateManifest d = UpdateManifest.Load(emptyDir, null);
                 Eq(Program.Version, d.AppVer, "清单兜底：外部与内嵌都缺失时用 DefaultJson 版本");
                 Eq("nilaoda/N_m3u8DL-RE", d.Repo, "清单兜底：引擎 repo 不回归");
-                Eq("binglanziyu/REm3u8可视化界面", d.SelfRepo, "清单兜底：DefaultJson 带 self.repo");
+                Eq("binglanziyu/REm3u8-GUI", d.SelfRepo, "清单兜底：DefaultJson 带 self.repo");
                 Eq("REM-GUI.exe", d.SelfAssetHint, "清单兜底：DefaultJson 带 self.assetHint");
                 Ok(d.Mirrors.Count > 0, "清单兜底：镜像列表不空");
 
@@ -525,25 +525,25 @@ namespace Rem.Tests
                 File.WriteAllText(ext, "   ", new UTF8Encoding(false));
                 UpdateManifest z = UpdateManifest.Load(emptyDir, null);
                 Eq(Program.Version, z.AppVer, "清单读取：外部文件为空时回落兜底");
-                Eq("binglanziyu/REm3u8可视化界面", z.SelfRepo, "清单读取：回落兜底后 self.repo 仍在");
+                Eq("binglanziyu/REm3u8-GUI", z.SelfRepo, "清单读取：回落兜底后 self.repo 仍在");
 
                 // ④ 老清单没有 self 段 → 用常量兜底，自更新检查不至于整块失效
                 File.WriteAllText(ext, "{\"version\":\"1.0.0\",\"engine\":{\"repo\":\"a/b\",\"mirrors\":[\"\"]}}",
                     new UTF8Encoding(false));
                 UpdateManifest old = UpdateManifest.Load(emptyDir, null);
                 Eq("1.0.0", old.AppVer, "清单读取：老清单版本正常");
-                Eq("binglanziyu/REm3u8可视化界面", old.SelfRepo, "清单读取：缺 self 段时用默认仓库兜底");
+                Eq("binglanziyu/REm3u8-GUI", old.SelfRepo, "清单读取：缺 self 段时用默认仓库兜底");
                 Eq("REM-GUI.exe", old.SelfAssetHint, "清单读取：缺 self 段时用默认资产名兜底");
 
                 // ⑤ 中文仓库名逐段编码：不编码 api.github.com 会 404
-                Eq("binglanziyu/REm3u8%E5%8F%AF%E8%A7%86%E5%8C%96%E7%95%8C%E9%9D%A2",
-                   UpdateChecker.EncodeRepo("binglanziyu/REm3u8可视化界面"), "EncodeRepo 中文段百分号编码");
-                Eq("https://api.github.com/repos/binglanziyu/REm3u8%E5%8F%AF%E8%A7%86%E5%8C%96%E7%95%8C%E9%9D%A2/releases/latest",
-                   UpdateChecker.RepoApiUrl("binglanziyu/REm3u8可视化界面"), "自更新 API URL 中文段已编码");
-                Eq("https://github.com/binglanziyu/REm3u8%E5%8F%AF%E8%A7%86%E5%8C%96%E7%95%8C%E9%9D%A2/releases",
-                   UpdateChecker.RepoPageUrl("binglanziyu/REm3u8可视化界面"), "发布页 URL 中文段已编码");
+                Eq("owner/%E4%B8%AD%E6%96%87%E4%BB%93%E5%BA%93",
+                   UpdateChecker.EncodeRepo("owner/中文仓库"), "EncodeRepo 中文段百分号编码");
+                Eq("https://api.github.com/repos/owner/%E4%B8%AD%E6%96%87%E4%BB%93%E5%BA%93/releases/latest",
+                   UpdateChecker.RepoApiUrl("owner/中文仓库"), "自更新 API URL 中文段已编码");
+                Eq("https://github.com/owner/%E4%B8%AD%E6%96%87%E4%BB%93%E5%BA%93/releases",
+                   UpdateChecker.RepoPageUrl("owner/中文仓库"), "发布页 URL 中文段已编码");
                 Eq("nilaoda/N_m3u8DL-RE", UpdateChecker.EncodeRepo(" nilaoda/N_m3u8DL-RE "), "EncodeRepo ASCII 仓库名原样（去空白）");
-                Ok(UpdateChecker.RepoApiUrl("binglanziyu/REm3u8可视化界面").IndexOf("可视化") < 0,
+                Ok(UpdateChecker.RepoApiUrl("owner/中文仓库").IndexOf("中文") < 0,
                    "自更新 URL 里不得出现裸中文");
                 Eq("", UpdateChecker.EncodeRepo(""), "EncodeRepo 空串返回空");
 

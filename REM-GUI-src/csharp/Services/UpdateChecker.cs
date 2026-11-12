@@ -36,7 +36,7 @@ namespace Rem.Services
         /// <summary>内嵌清单的资源名（build_csharp.ps1 以 /resource:...,update.json 嵌入）。</summary>
         public const string EmbeddedResourceName = "update.json";
         /// <summary>self 段缺失时的默认仓库：仓库名含中文，拼 URL 前必须逐段编码。</summary>
-        public const string DefaultSelfRepo = "binglanziyu/REm3u8可视化界面";
+        public const string DefaultSelfRepo = "binglanziyu/REm3u8-GUI";
         public const string DefaultSelfAssetHint = "REM-GUI.exe";
 
         /// <summary>内置默认清单：外部文件与内嵌资源都不可用时的兜底。</summary>
@@ -46,7 +46,7 @@ namespace Rem.Services
             "\"notes\":\"C# WinForms 重建版\"," +
             "\"engine\":{\"repo\":\"nilaoda/N_m3u8DL-RE\",\"assetHint\":\"win-x64\"," +
             "\"mirrors\":[\"\",\"https://gh-proxy.com/\"]}," +
-            "\"self\":{\"repo\":\"binglanziyu/REm3u8可视化界面\",\"assetHint\":\"REM-GUI.exe\"}" +
+            "\"self\":{\"repo\":\"binglanziyu/REm3u8-GUI\",\"assetHint\":\"REM-GUI.exe\"}" +
             "}";
 
         /// <summary>
@@ -391,7 +391,7 @@ namespace Rem.Services
         }
 
         /// <summary>
-        /// 仓库名逐段百分号编码。仓库名含中文（binglanziyu/REm3u8可视化界面）时若直接拼进 URL，
+        /// 仓库名逐段百分号编码。仓库名含中文时若直接拼进 URL，
         /// api.github.com 会返回 404，因此按 "/" 拆段、每段单独 Uri.EscapeDataString 后再拼回。
         /// </summary>
         public static string EncodeRepo(string repo)
