@@ -1,0 +1,90 @@
+REM-GUI —— N_m3u8DL-RE 图形界面（C# WinForms 版）
+================================================
+
+版本 3.0.0 ｜ .NET Framework 4.8（Windows 10/11 自带，无需额外安装）
+
+一、怎么启动
+-----------
+双击 REM-GUI.exe 即可。程序目录就是它自己所在的目录，不做回退。
+
+发行版（Releases）只提供 REM-GUI.exe 单个文件，把它放到任意目录后双击运行；
+首次启动会尝试拉取引擎与混流工具，也可手动准备下面两个文件放在同一目录：
+  N_m3u8DL-RE.exe    下载引擎（0.6.0）
+  ffmpeg.exe         混流工具（N-94813-g85386c36e3）
+
+三个文件齐备时优先使用本地工具；缺失哪个，启动后会自动从 exe 内嵌资源
+释放出来（内嵌自愈源同样为上面两个版本），日志会写「>> 已释放内置 xxx」。
+程序目录里不会留下其它文件。
+
+全部运行数据（配置、日志）统一放在：
+  %LOCALAPPDATA%\REM-GUI\
+    config.json      界面选项
+    logs\            运行日志（含引擎原始日志 re_*.log）
+
+同一时间只允许一个实例（重复双击会把已开窗口拉到前面）。
+
+二、界面功能
+-----------
+  链接          粘贴 m3u8 / mpd 地址
+  文件名        留空则按 URL 自动命名
+  保存目录      下载产物落盘位置，可点「打开」直达
+  引擎          RE 路径，留空用内置版；「…」可另选其它版本
+  选项          智能预检 / 混流为 MP4 / 边下边转(-mt) / 二进制合并 /
+                跳过合并 / 仅解析不下载 / 追加 URL 参数 / 完成后删分片 /
+                校验分片数 / 自动选流
+  高级设置…     线程数、重试次数、请求超时等；解密方式固定为 AES-128，
+                只需按需填 KEY / IV（支持明文显示与 DPAPI 加密落盘）
+  开始下载 / 停止 / 清屏
+  检查更新      比对 update.json，测速选镜像后给出最新版本
+
+进度行显示：已完成分片 / 总分片　百分比　速度
+百分比与分片数同源（都按分片计），下载完成时统一收口到 N/N 100.0%。
+合并、混流阶段会显示对应的阶段状态，不会再出现「分片没下完却 100%」。
+
+三、开发与构建
+-----------
+  前置     本仓库不包含任何二进制。克隆后请先把两个工具放到 dist\ 顶层，
+            否则构建出来的 exe 没有可内嵌的自愈源：
+              dist\N_m3u8DL-RE.exe    下载引擎 0.6.0
+              dist\ffmpeg.exe         混流工具 N-94813-g85386c36e3
+            （取自官方 Releases：nilaoda/N_m3u8DL-RE、BtbN/FFmpeg-Builds，
+              版本与授权见 THIRD_PARTY_NOTICES.md）
+  源码      REM-GUI-src\csharp\   （Program / Core / Engine / Services / UI / Interop）
+  构建      powershell -ExecutionPolicy Bypass -File REM-GUI-src\build_csharp.ps1
+              -CheckOnly   只做语法检查，不出 exe
+              -Test        跑单测（tests\CoreTests.cs，编译到 %TEMP% 后自动清理）
+              不加参数     产出 dist\REM-GUI.exe
+  单测      REM-GUI-src\tests\CoreTests.cs
+              配置归一 / 参数拼装 / JSON / 掩码 / 断点续传等纯逻辑断言
+  端到端    powershell -ExecutionPolicy Bypass -File REM-GUI-src\tools\e2e_test.ps1
+              注入测试流 → 点开始 → 采样进度与日志 → 校验产物（产物落 %TEMP%）
+  冒烟      powershell -ExecutionPolicy Bypass -File REM-GUI-src\tools\smoke_test.ps1
+              冷启动耗时 / 内存 / DPI / 目录残留（截图落 %TEMP%）
+
+  发布      Releases 只上传 dist\REM-GUI.exe 单文件（引擎与 ffmpeg 由使用者
+            自备或由内嵌自愈源释放），仓库本身不含 exe；版本号改动需同步
+            REM-GUI-src\update.json 与 csharp\AssemblyInfo.cs。
+
+分层铁律：UI → Services → Engine → Core 单向依赖，Engine 层不引用任何控件类型；
+后台线程只更新标志位与队列，界面用单个 100ms 定时器批量取。
+
+四、已知行为说明（非缺陷）
+-----------
+1) 引擎是多行 TUI 渲染，靠 ANSI 光标定位换行。输出被重定向后引擎会关闭 ANSI，
+   原始流里两行之间没有换行符。程序已在日志层自动在行内时间戳前补断行。
+2) 引擎的 stdout 按系统 OEM 代码页（简中 936）输出，日志按该编码解码；
+   引擎自己写的 re_*.log 文件是 UTF-8，两者互不影响。
+3) 日志区是 RichEdit，外部工具用 GetWindowText 读不到内容，需用
+   EM_GETLINECOUNT / WM_GETTEXTLENGTH 或 EM_SETSEL+WM_COPY 取值。
+
+五、解密相关
+-----------
+解密方式固定为 AES_128，无需也不可选解密引擎：程序恒定下发
+  --custom-hls-method AES_128
+需要时再填两项：
+  --custom-hls-key   KEY（32 位十六进制，等价于 KID:KEY 的 KEY 段）
+  --custom-hls-iv    IV （32 位十六进制，可留空）
+KEY 与 IV 支持「明文显示」切换；未勾明文时按 DPAPI 加密保存到 config.json，
+日志里的值一律以 * 打码，界面命令行预览与实际下发完全一致。
+IV 留空不影响下载；只填了 KEY 没填 IV 时，仅提示、不拦截。
+（内容由AI生成，仅供参考）
