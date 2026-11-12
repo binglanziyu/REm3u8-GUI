@@ -9,7 +9,7 @@
 ![Runtime](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)
 
-[特性](#特性) · [快速开始](#快速开始) · [从源码构建](#从源码构建) · [数据与日志](#数据与日志) · [许可](#依赖与许可)
+[下载](#下载) · [特性](#特性) · [快速开始](#快速开始) · [从源码构建](#从源码构建) · [数据与日志](#数据与日志) · [许可](#依赖与许可)
 
 </div>
 
@@ -65,6 +65,18 @@ REm3u8-GUI 是 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) 的 Windows
         └─ 产物 ── 保存目录下的成品文件
 ```
 
+## 下载
+
+成品已发布，直接用现成的 exe，不必自行构建：
+
+| 版本 | 文件 | 大小 | 形态 |
+|:--|:--|:--|:--|
+| v3.0.0 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.0/REM-GUI.exe) | 23.98 MB | 单文件免安装，引擎与 FFmpeg 已内置 |
+
+- 直链（复制到下载工具即可）：`https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.0/REM-GUI.exe`
+- 全部版本与更新记录见 [Releases](https://github.com/binglanziyu/REm3u8-GUI/releases)。国内访问慢可走 [ghproxy 镜像](https://ghproxy.net/https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.0/REM-GUI.exe)。
+- 免安装、免 .NET SDK、免额外附件：双击即用，配置与日志写在程序目录。仅支持 Windows 10 / 11，需要 .NET Framework 4.8（系统自带）。
+
 ## 快速开始
 
 ```text
@@ -117,7 +129,7 @@ powershell -ExecutionPolicy Bypass -File .\REM-GUI-src\tools\smoke_test.ps1
 powershell -ExecutionPolicy Bypass -File .\REM-GUI-src\tools\e2e_test.ps1
 ```
 
-> 当前仓库尚未发布 Release，没有可直接下载的成品 exe，请按上面的步骤自行构建。
+> 只想用成品不必构建，直接取 [REM-GUI.exe v3.0.0](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.0/REM-GUI.exe)；需要改代码或自行验证构建链路时，再按上面的步骤来。
 
 ## 目录结构
 
