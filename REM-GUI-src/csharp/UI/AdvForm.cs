@@ -76,6 +76,8 @@ namespace Rem.UI
         private readonly Dictionary<CheckBox, string> tipText = new Dictionary<CheckBox, string>();
         // 被互斥锁住的开关 → 拦住它的那一项名字（用于提示"先取消谁"）
         private readonly Dictionary<CheckBox, string> lockReason = new Dictionary<CheckBox, string>();
+        // 被引擎强制开启、点也点不掉的开关 → 强制来源（勾了混流，RE 自己就会开二进制合并）
+        private readonly Dictionary<CheckBox, string> forceReason = new Dictionary<CheckBox, string>();
 
         public AdvForm(AppConfig cfg)
         {
@@ -177,7 +179,7 @@ namespace Rem.UI
 
             // 三种状态都要有字面解释：只靠颜色区分，用户会以为互斥项是"坏了"
             Label lbLegend = new Label();
-            lbLegend.Text = "绿底 = 已开启　　暗底 = 已关闭　　暗橙底 = 与另一个选项互斥，先取消对方才能勾选";
+            lbLegend.Text = "绿底 = 已开启　　暗底 = 已关闭　　暗橙底 = 互斥　　亮绿 = 引擎强制开启（点不掉）";
             lbLegend.AutoSize = true;
             lbLegend.ForeColor = Theme.Dim;
             lbLegend.Font = Theme.Ui(8F);
@@ -373,6 +375,14 @@ namespace Rem.UI
 
             if (lockReason.ContainsKey(chkMux)) chkMux.Checked = false;
             if (lockReason.ContainsKey(chkConcurrent)) chkConcurrent.Checked = false;
+
+            // 一致性优先：只要混流真的生效，引擎就会自己打开二进制合并
+            // （日志原文「你已开启下载完成后混流，自动开启二进制合并」）。
+            // 界面必须如实渲染成"被强制开启"，不能停在没勾的样子：
+            // 否则用户以为没合并、实际合并了，参数预览也和真实行为对不上。
+            bool muxEffective = chkMux.Checked && !skipMerge && !skipDl;
+            SetToggleForced(chkBinary, muxEffective ? "混流为 MP4" : null);
+            if (forceReason.ContainsKey(chkBinary) && !chkBinary.Checked) chkBinary.Checked = true;
         }
 
         /// <summary>
@@ -405,6 +415,40 @@ namespace Rem.UI
             }
         }
 
+        /// <summary>
+        /// 强制开启态的渲染：和互斥锁一样不置灰，只靠颜色 + 后缀说明，
+        /// 但底色用开启绿、描边与文字提到亮绿，表达"引擎已经替你开了，点也取消不掉"。
+        /// </summary>
+        private void SetToggleForced(CheckBox c, string forcedBy)
+        {
+            string baseText = (string)c.Tag;
+            string baseTip = null;
+            tipText.TryGetValue(c, out baseTip);
+
+            if (string.IsNullOrEmpty(forcedBy))
+            {
+                forceReason.Remove(c);
+                // 解除强制时，只有没被互斥锁同时占用才复位，避免把互斥态一起擦掉
+                if (!lockReason.ContainsKey(c))
+                {
+                    c.Text = baseText;
+                    Theme.ForceToggle(c, false);
+                    if (tips != null && baseTip != null) tips.SetToolTip(c, baseTip);
+                }
+                return;
+            }
+
+            forceReason[c] = forcedBy;
+            c.Text = baseText + "（强制）";
+            Theme.ForceToggle(c, true);
+            if (tips != null)
+            {
+                tips.SetToolTip(c, (baseTip == null ? baseText : baseTip)
+                    + "\r\n\r\n已被强制开启：引擎在「" + forcedBy + "」时一定会做二进制合并，"
+                    + "要关掉它得先取消「" + forcedBy + "」。");
+            }
+        }
+
         private void BuildTips()
         {
             tips = new ToolTip();
@@ -416,7 +460,7 @@ namespace Rem.UI
             Tip(chkSmart, "智能预检：下载前先取一次媒体播放列表做校验，链接失效、分片缺失能提前暴露，避免白下几十 MB 才报错；代理为 socks 类型时不预检。");
             Tip(chkMux, "混流为 MP4：把分离的视频轨与音频轨合成一个 mp4 文件（-M format=mp4）。关掉就只留分离的轨文件。");
             Tip(chkConcurrent, "边下边转 (-mt)：音视频两条轨同时下载，整体更快；带宽紧张或站点限速严格时可以关掉，避免两条轨互相抢带宽。");
-            Tip(chkBinary, "二进制合并：用二进制拼接代替 ffmpeg 混流，速度快、不重新编码；只适合分片本身已是完整 ts/m4s 的源，音画不同步的源别用。");
+            Tip(chkBinary, "二进制合并：用二进制拼接代替 ffmpeg 混流，速度快、不重新编码；只适合分片本身已是完整 ts/m4s 的源，音画不同步的源别用。\r\n\r\n注意：勾了「混流为 MP4」时，引擎自己就会打开二进制合并，此时本项会被标成「强制」且点不掉，要关记得先取消混流。");
             Tip(chkSkipMerge, "跳过合并：不合成单文件，只保留分离的轨文件（--skip-merge）。与「混流为 MP4」互斥。");
             Tip(chkSkipDownload, "仅解析不下载：只解析出有哪些轨道和分片，不实际写文件（--skip-download），用来探明链接结构；与混流、边下边转互斥。");
             Tip(chkAppend, "追加 URL 参数：把输入链接 ? 后面的参数附加到每个分片请求上（--append-url-params）；部分站点不带这些参数会直接 403。");
@@ -565,6 +609,17 @@ namespace Rem.UI
                     }
                     return;
                 }
+                // 被引擎强制开启的项不允许取消：勾回去并说明要先关掉谁
+                if (!box.Checked && forceReason.TryGetValue(box, out why))
+                {
+                    box.Checked = true;
+                    if (tips != null)
+                    {
+                        tips.Show("已被强制开启：引擎在「" + why + "」时一定会做二进制合并，先取消它才能关",
+                            box, 0, box.Height + 4, 3200);
+                    }
+                    return;
+                }
                 ApplySkipRules();
             };
             parent.Controls.Add(c);
@@ -605,7 +660,9 @@ namespace Rem.UI
             Smart = chkSmart.Checked;
             Mux = chkMux.Checked;
             Concurrent = chkConcurrent.Checked;
-            Binary = chkBinary.Checked;
+            // 强制开启不算用户的选择：混流在场时引擎本来就会合并，把这个状态写进配置的话，
+            // 用户下次取消混流会发现「二进制合并」莫名还是勾着的（D13）
+            Binary = chkBinary.Checked && !forceReason.ContainsKey(chkBinary);
             SkipMerge = chkSkipMerge.Checked;
             SkipDownload = chkSkipDownload.Checked;
             AppendUrlParams = chkAppend.Checked;

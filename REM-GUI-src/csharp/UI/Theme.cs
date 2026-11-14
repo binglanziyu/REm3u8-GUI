@@ -194,6 +194,10 @@ namespace Rem.UI
         // 所以锁定态不改 Enabled，改由这里集中记录并按锁定色绘制。
         private static readonly HashSet<CheckBox> lockedToggles = new HashSet<CheckBox>();
 
+        // 被引擎强制开启的开关（混流 → 二进制合并）：不是用户勾的、也点不掉，
+        // 所以给比"已开启"更硬的一套绿（描边与文字都提到 Green），和可自由勾选的绿底区分开。
+        private static readonly HashSet<CheckBox> forcedToggles = new HashSet<CheckBox>();
+
         /// <summary>锁定/解锁一个开关。锁定后仍可读可点，但颜色与后缀表明它当前不可勾选。</summary>
         public static void LockToggle(CheckBox c, bool on)
         {
@@ -202,9 +206,27 @@ namespace Rem.UI
             PaintToggle(c);
         }
 
-        /// <summary>开关上色：绿底=开启、暗底=关闭、暗橙底+橙字=互斥锁定。</summary>
+        /// <summary>标记/取消「被强制开启」。强制态照样显示勾选，但点掉会被立刻回滚并说明原因。</summary>
+        public static void ForceToggle(CheckBox c, bool on)
+        {
+            if (on) forcedToggles.Add(c);
+            else forcedToggles.Remove(c);
+            PaintToggle(c);
+        }
+
+        /// <summary>开关上色：绿底=开启、暗底=关闭、暗橙底+橙字=互斥锁定、亮绿描边=强制开启。</summary>
         public static void PaintToggle(CheckBox c)
         {
+            if (forcedToggles.Contains(c))
+            {
+                c.BackColor = Accent;
+                c.FlatAppearance.CheckedBackColor = Accent;
+                c.FlatAppearance.BorderColor = Green;
+                c.ForeColor = Green;
+                c.Cursor = Cursors.No;
+                c.Invalidate();
+                return;
+            }
             if (lockedToggles.Contains(c))
             {
                 c.BackColor = FieldLock;

@@ -202,5 +202,46 @@ namespace Rem.Interop
             }
             return job;
         }
+
+        // ---------- 完成提醒 ----------
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FLASHWINFO
+        {
+            public uint cbSize;
+            public IntPtr hwnd;
+            public uint dwFlags;
+            public uint uCount;
+            public uint dwTimeout;
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+        /// <summary>
+        /// 闪烁任务栏按钮（FLASHW_ALL | FLASHW_TIMERNOFG）：窗口切到后台/最小化时，
+        /// 用户也能看到"跑完了"。窗口一旦被激活，闪烁由系统自动停止。
+        /// </summary>
+        internal static void FlashTaskbar(IntPtr hwnd, uint count)
+        {
+            if (hwnd == IntPtr.Zero) return;
+            try
+            {
+                FLASHWINFO fi = new FLASHWINFO();
+                fi.cbSize = (uint)Marshal.SizeOf(typeof(FLASHWINFO));
+                fi.hwnd = hwnd;
+                // FLASHW_TRAY(0x2) 只闪任务栏按钮、且只闪本程序那一格；FLASHW_TIMERNOFG(0xC) 表示
+                // 一直闪到窗口被切到前台为止。注意 0x2|0xC 里没有 FLASHW_CAPTION，标题栏不会一起闪（别写成 FLASHW_ALL=0x3）
+                fi.dwFlags = 0x00000002u | 0x0000000Cu;
+                fi.uCount = count;   // TIMERNOFG 下倒计时由“是否前台”决定，count 仅作次数上界
+                fi.dwTimeout = 0;
+                FlashWindowEx(ref fi);
+            }
+            catch (Exception ex)
+            {
+                Note.Swallow("Native.cs:FlashTaskbar", ex);
+            }
+        }
     }
 }

@@ -1,4 +1,4 @@
-﻿// =====================================================================
+// =====================================================================
 //  UI\MainForm.Log.cs — MainForm 的日志渲染与状态栏分区（partial 拆分）
 //  纯代码搬移，逻辑与行为与原 MainForm.cs 完全一致
 // =====================================================================
@@ -121,9 +121,11 @@ namespace Rem.UI
 
         private void RefreshProgressUi()
         {
-            lblProg.Text = prog.Text;
-            string speed = prog.Speed;
-            lblSpd.Text = speed.Length > 0 ? speed : "";
+            // 主行只放「进度 + 总大小」，速率单独占右侧一格：
+            // 早先两者挤在一行，总量 1.95GB 会被读成速度，用户根本分不清哪个是哪个
+            lblProg.Text = prog.MainText;
+            lblSpd.Text = prog.Speed;
+            lblProg.ForeColor = barDone ? Theme.Green : Theme.AccentLight;
             bar.Invalidate();
         }
 

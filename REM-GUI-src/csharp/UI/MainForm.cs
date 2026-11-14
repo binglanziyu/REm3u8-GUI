@@ -54,6 +54,14 @@ namespace Rem.UI
         private ThinScroll scLog;
         private ThinScroll scCmd;
         private Panel bar;
+        // 进度条已成功收口：满格改绿，和"还没下完的绿"区分开
+        private bool barDone;
+        // 完成/失败横幅：盖在日志顶部的一条整宽色带，几秒后自动收，点击可立即收
+        private Panel banner;
+        private Label lbBannerTitle;
+        private Label lbBannerDetail;
+        private Color bannerTone = Theme.Green;
+        private DateTime bannerUntil = DateTime.MinValue;
         private Panel cardOpt;
         private TextBox numThreads;
         private TextBox numRetries;
@@ -321,6 +329,43 @@ namespace Rem.UI
             Controls.Add(txtLog);
             scLog = new ThinScroll(txtLog, this);
 
+            // ---- 完成横幅 ----
+            // 完成瞬间的信号必须够重：日志里一行绿字、状态栏三个字都太轻，切到别的窗口再回来极容易漏看。
+            // 这里盖在日志顶部做一条整宽色带（成功绿 / 失败红 / 停止橙），6 秒后自动收起，点击可立即收起。
+            banner = new Panel();
+            banner.Location = new Point(S(8), S(306));
+            banner.Size = new Size(S(488), S(58));
+            banner.BackColor = Theme.Card;
+            banner.Visible = false;
+            banner.Cursor = Cursors.Hand;
+            banner.Paint += OnPaintBanner;
+            banner.Click += delegate (object s, EventArgs e) { HideBanner(); };
+
+            lbBannerTitle = new Label();
+            lbBannerTitle.AutoSize = false;
+            lbBannerTitle.AutoEllipsis = true;   // 文件名再长也不撑破横幅
+            lbBannerTitle.BackColor = Theme.Card;
+            lbBannerTitle.Font = Theme.UiBold(12F);
+            lbBannerTitle.TextAlign = ContentAlignment.MiddleLeft;
+            lbBannerTitle.Location = new Point(S(16), S(6));
+            lbBannerTitle.Size = new Size(S(462), S(26));
+            lbBannerTitle.Click += delegate (object s, EventArgs e) { HideBanner(); };
+            banner.Controls.Add(lbBannerTitle);
+
+            lbBannerDetail = new Label();
+            lbBannerDetail.AutoSize = false;
+            lbBannerDetail.AutoEllipsis = true;
+            lbBannerDetail.BackColor = Theme.Card;
+            lbBannerDetail.Font = Theme.Ui(9F);
+            lbBannerDetail.ForeColor = Theme.TextDim;
+            lbBannerDetail.TextAlign = ContentAlignment.MiddleLeft;
+            lbBannerDetail.Location = new Point(S(16), S(32));
+            lbBannerDetail.Size = new Size(S(462), S(20));
+            lbBannerDetail.Click += delegate (object s, EventArgs e) { HideBanner(); };
+            banner.Controls.Add(lbBannerDetail);
+
+            Controls.Add(banner);
+
             // ---- 命令行预览 ----
             txtCmd = new TextBox();
             txtCmd.Location = new Point(S(8), S(658));
@@ -469,15 +514,59 @@ namespace Rem.UI
         private void OnPaintBar(object sender, PaintEventArgs e)
         {
             e.Graphics.Clear(Theme.Field);
-            int pct = prog.PercentInt;
+            // 成功收口后整条满格并换成更亮的绿：一眼就能和"下到一半"区分开
+            int pct = barDone ? 100 : prog.PercentInt;
             int w = bar.Width * pct / 100;
             if (w <= 0) return;
             // 渐变而非纯色：进度条在深底上更有层次，也避免和主按钮抢同一块色
+            Color from = barDone ? Theme.Green : Theme.AccentHover;
             using (System.Drawing.Drawing2D.LinearGradientBrush b = new System.Drawing.Drawing2D.LinearGradientBrush(
-                new Rectangle(0, 0, Math.Max(w, 1), Math.Max(bar.Height, 1)), Theme.AccentHover, Theme.AccentLight, 0F))
+                new Rectangle(0, 0, Math.Max(w, 1), Math.Max(bar.Height, 1)), from, Theme.AccentLight, 0F))
             {
                 e.Graphics.FillRectangle(b, 0, 0, w, bar.Height);
             }
+        }
+
+        /// <summary>标题栏带上状态：最小化到任务栏、Alt+Tab 缩略图里也能立刻看出跑完没有。</summary>
+        private void SetTitleState(string prefix)
+        {
+            Text = string.IsNullOrEmpty(prefix)
+                ? "REM-GUI " + Program.Version
+                : prefix + " · REM-GUI " + Program.Version;
+        }
+
+        private void OnPaintBanner(object sender, PaintEventArgs e)
+        {
+            // 左侧粗色条 + 一圈同色描边：颜色本身就是结论（绿=成功、红=失败、橙=停止）
+            using (SolidBrush b = new SolidBrush(bannerTone))
+            {
+                e.Graphics.FillRectangle(b, 0, 0, S(6), banner.Height);
+            }
+            using (Pen p = new Pen(bannerTone))
+            {
+                e.Graphics.DrawRectangle(p, 0, 0, banner.Width - 1, banner.Height - 1);
+            }
+        }
+
+        /// <summary>弹出完成/失败横幅。seconds 取 0 表示常驻——要显眼的事（下完了 / 失败了）不该自己消失，
+        /// 只由“点一下”或“开始下一次任务”收起；正数则由 OnTick 到点自动收。</summary>
+        private void ShowBanner(string title, string detail, Color tone, int seconds)
+        {
+            if (banner == null || banner.IsDisposed) return;
+            bannerTone = tone;
+            lbBannerTitle.Text = title;
+            lbBannerTitle.ForeColor = tone;
+            lbBannerDetail.Text = detail;
+            banner.Visible = true;
+            banner.BringToFront();
+            banner.Invalidate();
+            bannerUntil = seconds > 0 ? DateTime.Now.AddSeconds(seconds) : DateTime.MaxValue;
+        }
+
+        private void HideBanner()
+        {
+            bannerUntil = DateTime.MinValue;
+            if (banner != null && !banner.IsDisposed) banner.Visible = false;
         }
 
         // ========================= 启动 =========================

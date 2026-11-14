@@ -16,7 +16,7 @@ using Rem.Core;
 public static class Program
 {
     /// <summary>应用版本：配置文件、窗口标题、日志首行统一取这里。</summary>
-    public const string Version = "3.0.0";
+    public const string Version = "3.0.1";
 
     /// <summary>单实例互斥体名（Local\ 作用域，多用户会话互不干扰）。</summary>
     private const string MutexName = "Local\\REM-GUI-Single-7F1C4A2E";
