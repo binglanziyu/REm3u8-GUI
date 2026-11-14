@@ -71,7 +71,9 @@ namespace Rem.Engine
                 a.Add("-M"); a.Add("format=mp4");
             }
             if (cfg.Concurrent && !cfg.SkipDownload) a.Add("-mt");
-            if (cfg.Binary) a.Add("--binary-merge");
+            // 混流一旦生效，引擎会自己打开二进制合并（日志：「你已开启下载完成后混流，自动开启二进制合并」）。
+            // 这里显式下发，让参数预览和真实行为一致：预览里看得到，用户才不会以为没合并。
+            if (cfg.Binary || (cfg.Mux && !cfg.SkipMerge && !cfg.SkipDownload)) a.Add("--binary-merge");
             if (cfg.SkipMerge) a.Add("--skip-merge");
             if (cfg.SkipDownload) a.Add("--skip-download");
             if (cfg.AppendUrlParams) a.Add("--append-url-params");

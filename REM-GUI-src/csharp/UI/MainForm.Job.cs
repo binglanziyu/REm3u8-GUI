@@ -278,6 +278,10 @@ namespace Rem.UI
                 jobIndex++;
                 jobStart = DateTime.Now;
                 prog.Reset();
+                barDone = false;
+                lblStatus.Font = Theme.Ui(9F);   // 上一次成功的加粗收回去，状态栏长度不跳
+                SetTitleState(null);            // 标题也从"✔ 下载完成"复位回正常
+                HideBanner();
                 RefreshProgressUi();
                 state = RunState.Running;
                 btnStart.Enabled = false;
@@ -328,6 +332,12 @@ namespace Rem.UI
             // 每个子步骤独立兜底（P17）：单点异常不再连带跳过本 tick 的其余逻辑，
             // 也不会让一次 UI 更新失误演进成“进度卡死但无日志”。
             Step("drain", delegate () { FlushLog(); });
+            Step("banner", delegate ()
+            {
+                // 横幅到点自动收，别一直压着日志；收起后日志原样露出来
+                if (banner != null && banner.Visible && bannerUntil != DateTime.MinValue
+                    && DateTime.Now >= bannerUntil) HideBanner();
+            });
             Step("job", delegate ()
             {
                 if (runner != null)
@@ -462,10 +472,13 @@ namespace Rem.UI
             string name = currentName();
             TimeSpan el = DateTime.Now - jobStart;
 
-            // 失败先自救：退出码非 0，或退出码 0 但日志里已出现引擎的失败信号
+            // 失败判定 = 退出码非 0，或退出码 0 但日志里已出现引擎的失败信号
             // （坏片是「分片数量校验不通过」，合并/混流失败是「Mux failed / ERROR: Failed」，
             //   不拦的话会被当成“完成”并删掉续传文件与分片）
-            if (!killed && (code != 0 || sawJobFailed))
+            // 先落一个局部判定再交给自动补片：TryAutoPatch 内部会把 sawJobFailed 清掉（补片是"重来一次"），
+            // 清掉之后若补片自己也没救回来，这里就再也看不出这轮本该判失败，于是 code==0 被误判成功（D14）
+            bool jobFailed = !killed && (code != 0 || sawJobFailed);
+            if (jobFailed)
             {
                 if (TryAutoPatch(code))
                 {
@@ -478,8 +491,11 @@ namespace Rem.UI
             {
                 log.Warn(">> 已停止：" + name);
                 SetStatus("已停止", Theme.Orange);
+                SetTitleState("■ 已停止");
+                ShowBanner("■  已停止", name + "   ·   已下 " + prog.MainText + "   ·   点此收起", Theme.Orange, 6);
+                Native.FlashTaskbar(Handle, 3);
             }
-            else if (code == 0)
+            else if (!jobFailed)
             {
                 jobOk++;
                 log.Ok(">> 完成：" + name + "  耗时 " + FormatDuration(el));
@@ -488,15 +504,32 @@ namespace Rem.UI
                 PruneParts();
                 prog.Pct = 100;
                 if (prog.Total > 0) prog.Done = prog.Total;   // 完成即 100%：分片计数同步拉齐，口径一致
+                prog.Speed = "";                              // 完成后不该再挂着最后一帧的瞬时速率
+                barDone = true;
                 RefreshProgressUi();
+                // 完成必须有存在感：进度条满格转绿 + 日志顶部整宽绿色横幅 + 任务栏按钮闪烁。
+                // 横幅常驻（seconds=0）：切到别的窗口再回来，跑完这件事还在，直到点它或开始下一次任务
+                lblStatus.Font = Theme.UiBold(9.5F);
+                SetTitleState("✔ 下载完成");
+                ShowBanner("✔  下载完成",
+                    name + "   ·   " + FormatDuration(el) + "   ·   " + prog.MainText + "   ·   点此收起",
+                    Theme.Green, 0);
+                Native.FlashTaskbar(Handle, 4);
                 log.Diag("进度收口 " + prog.Text, "Progress");
             }
             else
             {
                 jobFail++;
-                log.Err(">> 失败：" + name + "  退出码 " + code + "  耗时 " + FormatDuration(el));
+                string why = code != 0 ? "退出码 " + code : "引擎报错（见日志）";
+                log.Err(">> 失败：" + name + "  " + why + "  耗时 " + FormatDuration(el));
                 log.Dim(">> 续传文件已保留，把它拖进窗口即可继续");
-                SetStatus("失败：退出码 " + code, Theme.Red);
+                SetStatus("失败：" + why, Theme.Red);
+                SetTitleState("✕ 下载失败");
+                prog.Speed = "";
+                RefreshProgressUi();
+                ShowBanner("✕  下载失败（" + why + "）",
+                    name + "   ·   续传文件已保留，拖进窗口即可继续   ·   点此收起", Theme.Red, 0);
+                Native.FlashTaskbar(Handle, 5);
             }
 
             if (dropped > 0)

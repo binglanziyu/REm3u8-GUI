@@ -9,6 +9,6 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyProduct("REM-GUI")]
 [assembly: AssemblyCompany("REM-GUI")]
 [assembly: AssemblyCopyright("Copyright © 2026")]
-[assembly: AssemblyVersion("3.0.0.0")]
-[assembly: AssemblyFileVersion("3.0.0.0")]
+[assembly: AssemblyVersion("3.0.1.0")]
+[assembly: AssemblyFileVersion("3.0.1.0")]
 [assembly: ComVisible(false)]

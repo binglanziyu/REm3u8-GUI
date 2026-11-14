@@ -28,16 +28,24 @@ namespace Rem.Engine
         public int Total;
         public double Pct = -1;
         public string Speed = "";
+        // 引擎在收口帧里给出的整片总大小（如 "1.95GB"）：这是容量，绝不能再当速率
+        public string Size = "";
 
         private static readonly Regex RxCount = new Regex("(\\d+)\\s*/\\s*(\\d+)", RegexOptions.Compiled);
         private static readonly Regex RxPct = new Regex("([0-9]+(?:\\.[0-9]+)?)\\s*%", RegexOptions.Compiled);
+        // 速率：单位后面必须真的带速率后缀（Bps / B/s / B/sec）。
+        // 早先前缀后缀写成可选，于是 "2153/2153 100.00% 1.95GB - 00:00:00" 里的总量被当成 1.95 GB/s（D12）
         private static readonly Regex RxSpeed = new Regex(
-            "([0-9]+(?:\\.[0-9]+)?)\\s*(?:([KMGT])(?:i?B)(?:ps|/s|/sec)?)",
+            "([0-9]+(?:\\.[0-9]+)?)\\s*([KMGT])?i?B(?:ps|/s|/sec)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        // 容量：同一套单位、但后面不跟速率后缀的才是总大小；负向前瞻挡住 "MBps" 这类速率
+        private static readonly Regex RxSize = new Regex(
+            "([0-9]+(?:\\.[0-9]+)?)\\s*([KMGT])i?B(?![A-Za-z])",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public void Reset()
         {
-            Done = 0; Total = 0; Pct = -1; Speed = "";
+            Done = 0; Total = 0; Pct = -1; Speed = ""; Size = "";
         }
 
         /// <summary>从一行输出里抽取进度；返回 true 表示这行是进度帧（不再进日志）。</summary>
@@ -52,11 +60,24 @@ namespace Rem.Engine
             bool hasPct = mp.Success;
             if (!hasCount && !hasPct) return false;
 
+            // 速率只认带 Bps / B/s / B/sec 后缀的字段；"1.95GB" 这种容量单独走 RxSize
             string spd = "";
             Match ms = RxSpeed.Match(line);
             if (ms.Success)
             {
-                spd = ms.Groups[1].Value + " " + ms.Groups[2].Value.ToUpperInvariant() + "B/s";
+                // 0.00Bps 是引擎"刚建连还没收到数据"时的占位，显示出来只是噪声
+                double val;
+                double.TryParse(ms.Groups[1].Value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out val);
+                string unit = ms.Groups[2].Success ? ms.Groups[2].Value.ToUpperInvariant() + "B" : "B";
+                if (val > 0) spd = ms.Groups[1].Value + " " + unit + "/s";
+            }
+
+            string size = "";
+            Match mz = RxSize.Match(line);
+            if (mz.Success)
+            {
+                size = mz.Groups[1].Value + " " + mz.Groups[2].Value.ToUpperInvariant() + "B";
             }
 
             int done = 0;
@@ -92,7 +113,10 @@ namespace Rem.Engine
                 if (pct >= 100 && Total > 0 && Done < Total) Done = Total;
             }
             if (spd.Length > 0) Speed = spd;
-            speedText = spd;
+            if (size.Length > 0) Size = size;
+            // 收口帧只给总量、没有速率；不清空的话上一帧的速度会一直挂在"完成"上
+            if (Pct >= 100) Speed = "";
+            speedText = Speed;
             return true;
         }
 
@@ -112,11 +136,25 @@ namespace Rem.Engine
         {
             get
             {
+                string s = MainText;
+                if (!string.IsNullOrEmpty(Speed)) s += "   ·   " + Speed;
+                return s;
+            }
+        }
+
+        /// <summary>
+        /// 界面主行只放「进度 + 总大小」，速率交给右侧独立的速度标签：
+        /// 早先两者挤在同一行，总量和速率混排，用户分不清 1.95GB 是速度还是体积。
+        /// </summary>
+        public string MainText
+        {
+            get
+            {
                 double p = Pct;
                 if (p < 0 && Total > 0) p = Done * 100.0 / Total;
                 string pctText = p < 0 ? "--" : p.ToString("0.0");
                 string s = Done + "/" + (Total > 0 ? Total.ToString() : "?") + "   " + pctText + "%";
-                if (!string.IsNullOrEmpty(Speed)) s += "   ·   " + Speed;
+                if (!string.IsNullOrEmpty(Size)) s += "   ·   共 " + Size;
                 return s;
             }
         }
