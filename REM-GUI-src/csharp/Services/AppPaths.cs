@@ -62,7 +62,7 @@ namespace Rem.Services
             }
             catch (Exception __ex)
             {
-                Note.Swallow("AppPaths.cs:59", __ex);
+                Note.Swallow(__ex);
                 return false;
             }
         }
@@ -97,8 +97,9 @@ namespace Rem.Services
                     {
                         WriteStream(src, target);
                     }
-                    catch (Exception)
+                    catch (Exception __ex)
                     {
+                        Note.Swallow(__ex);
                         target = inTools;
                         using (Stream src2 = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
                         {
@@ -131,14 +132,14 @@ namespace Rem.Services
                 string bak = target + ".bak";
                 try
                 {
-                    try { if (File.Exists(bak)) File.Delete(bak); } catch (Exception __ex) { Note.Swallow("AppPaths.cs:122", __ex); }
+                    try { if (File.Exists(bak)) File.Delete(bak); } catch (Exception __ex) { Note.Swallow(__ex); }
                     File.Replace(tmp, target, bak, true);
-                    try { if (File.Exists(bak)) File.Delete(bak); } catch (Exception __ex) { Note.Swallow("AppPaths.cs:124", __ex); }
+                    try { if (File.Exists(bak)) File.Delete(bak); } catch (Exception __ex) { Note.Swallow(__ex); }
                 }
                 catch (Exception)
                 {
                     // 跨卷或文件系统不支持 Replace 时退回 Move（先删再移，窗口最小）
-                    try { File.Delete(target); } catch (Exception __ex) { Note.Swallow("AppPaths.cs:129", __ex); }
+                    try { File.Delete(target); } catch (Exception __ex) { Note.Swallow(__ex); }
                     File.Move(tmp, target);
                 }
             }
@@ -172,7 +173,7 @@ namespace Rem.Services
                     }
                 }
             }
-            catch (Exception __ex) { Note.Swallow("AppPaths.cs:163", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             return "";
         }
 
@@ -188,8 +189,9 @@ namespace Rem.Services
                 if (!di.IsReady) return -1;
                 return di.AvailableFreeSpace;
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return -1;
             }
         }

@@ -7,6 +7,7 @@
 // =====================================================================
 using System;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 namespace Rem.Core
 {
@@ -46,6 +47,27 @@ namespace Rem.Core
         public static void Swallow(string tag)
         {
             Swallow(tag, null);
+        }
+
+        /// <summary>
+        /// 吞掉异常但留下痕迹，定位标签由编译器在调用点自动填充成「成员名(行号)」。
+        /// 手写标签（如 "Config.cs:153"）会随文件增删行持续漂移，实测最大偏差近 1100 行，
+        /// 故调用点一律写成 Note.Swallow(ex) 由编译器填充（重构方案第 4 章 E1）。
+        /// 显式传 tag 时仍以调用方给出的 tag 为准。
+        /// </summary>
+        public static void Swallow(Exception ex,
+                                   string tag = null,
+                                   [CallerMemberName] string member = null,
+                                   [CallerLineNumber] int line = 0)
+        {
+            Swallow(tag == null ? BuildTag(member, line) : tag, ex);
+        }
+
+        /// <summary>把编译器填充的成员名与行号拼成定位标签；成员名取不到时退化为行号。</summary>
+        private static string BuildTag(string member, int line)
+        {
+            if (member == null || member.Length == 0) return "?(" + line.ToString() + ")";
+            return member + "(" + line.ToString() + ")";
         }
     }
 }

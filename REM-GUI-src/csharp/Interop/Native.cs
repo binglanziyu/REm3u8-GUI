@@ -31,14 +31,14 @@ namespace Rem.Interop
                 int hr = DwmSetWindowAttribute(hwnd, 20, ref v, Marshal.SizeOf(typeof(int)));
                 if (hr != 0) DwmSetWindowAttribute(hwnd, 19, ref v, Marshal.SizeOf(typeof(int)));
             }
-            catch (Exception __ex) { Note.Swallow("Native.cs:33", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         public static void ApplyDarkScrollBar(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return;
             try { SetWindowTheme(hwnd, "DarkMode_CFD", null); }
-            catch (Exception __ex) { Note.Swallow("Native.cs:40", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         // ---------- 原生滚动条的隐藏与滚动控制（自绘细滚动条要用） ----------
@@ -62,7 +62,7 @@ namespace Rem.Interop
         {
             if (hwnd == IntPtr.Zero) return false;
             try { return (GetWindowLong(hwnd, GWL_STYLE) & WS_VSCROLL) != 0; }
-            catch (Exception __ex) { Note.Swallow("Native.cs:HasVertScrollStyle", __ex); return false; }
+            catch (Exception __ex) { Note.Swallow(__ex); return false; }
         }
 
         /// <summary>藏掉控件自带的系统滚动条（右键菜单/滚轮/键盘滚动都不受影响）。</summary>
@@ -70,21 +70,21 @@ namespace Rem.Interop
         {
             if (hwnd == IntPtr.Zero) return;
             try { ShowScrollBar(hwnd, SB_VERT, false); }
-            catch (Exception __ex) { Note.Swallow("Native.cs:HideScrollBar", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         public static int LineCount(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return 0;
             try { return (int)SendMessage(hwnd, EM_GETLINECOUNT, IntPtr.Zero, IntPtr.Zero); }
-            catch (Exception __ex) { Note.Swallow("Native.cs:LineCount", __ex); return 0; }
+            catch (Exception __ex) { Note.Swallow(__ex); return 0; }
         }
 
         public static int FirstVisibleLine(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return 0;
             try { return (int)SendMessage(hwnd, EM_GETFIRSTVISIBLELINE, IntPtr.Zero, IntPtr.Zero); }
-            catch (Exception __ex) { Note.Swallow("Native.cs:FirstVisibleLine", __ex); return 0; }
+            catch (Exception __ex) { Note.Swallow(__ex); return 0; }
         }
 
         /// <summary>滚到指定显示行：先大负数回顶，再下移，避开相对滚动误差累积。</summary>
@@ -97,21 +97,21 @@ namespace Rem.Interop
                 SendMessage(hwnd, EM_LINESCROLL, IntPtr.Zero, new IntPtr(-1000000));
                 if (line > 0) SendMessage(hwnd, EM_LINESCROLL, IntPtr.Zero, new IntPtr(line));
             }
-            catch (Exception __ex) { Note.Swallow("Native.cs:ScrollToLine", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         public static void ScrollBy(IntPtr hwnd, int lines)
         {
             if (hwnd == IntPtr.Zero || lines == 0) return;
             try { SendMessage(hwnd, EM_LINESCROLL, IntPtr.Zero, new IntPtr(lines)); }
-            catch (Exception __ex) { Note.Swallow("Native.cs:ScrollBy", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         public static void SetRedraw(IntPtr hwnd, bool enable)
         {
             if (hwnd == IntPtr.Zero) return;
             try { SendMessage(hwnd, WM_SETREDRAW, enable ? new IntPtr(1) : IntPtr.Zero, IntPtr.Zero); }
-            catch (Exception __ex) { Note.Swallow("Native.cs:47", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         // ---------- Job 对象：父进程退出时子进程一起结束 ----------
@@ -197,7 +197,7 @@ namespace Rem.Interop
             }
             catch (Exception)
             {
-                if (job != IntPtr.Zero) { try { CloseHandle(job); } catch (Exception __ex) { Note.Swallow("Native.cs:133", __ex); } }
+                if (job != IntPtr.Zero) { try { CloseHandle(job); } catch (Exception __ex) { Note.Swallow(__ex); } }
                 return IntPtr.Zero;
             }
             return job;
@@ -240,7 +240,7 @@ namespace Rem.Interop
             }
             catch (Exception ex)
             {
-                Note.Swallow("Native.cs:FlashTaskbar", ex);
+                Note.Swallow(ex);
             }
         }
     }

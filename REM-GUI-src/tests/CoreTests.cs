@@ -123,19 +123,30 @@ namespace Rem.Tests
                 Eq("SEG0", File.ReadAllText(Path.Combine(stream, "1.ts")), "补片执行: 用前一片顶替且内容一致");
                 Eq(4, Directory.GetFiles(stream, "*.ts").Length, "补片执行: 只新增不删除，共 4 片");
 
-                // 缺口过大（4/9 > 30%）时放弃，避免把成片补成同一片无限重复
+                // 缺口过大（6/10 = 60% > 50%）时放弃，避免把成片补成同一片无限重复
                 string bigDir = Path.Combine(root, "big");
                 string bigStream = Path.Combine(bigDir, "0____");
                 Directory.CreateDirectory(bigStream);
+                StringBuilder bigM3u = new StringBuilder("#EXTM3U" + "\n");
                 for (int i = 0; i < 10; i++)
                 {
-                    if (i % 2 == 0) File.WriteAllText(Path.Combine(bigStream, i + ".ts"), "B" + i);
+                    bigM3u.Append("#EXTINF:4,").Append("\n").Append(i).Append(".ts\n");
+                }
+                File.WriteAllText(Path.Combine(bigDir, "raw.m3u8"), bigM3u.ToString());
+                Eq(10, SegmentPatcher.ExpectedCount(bigDir), "补片上限: 清单 10 片");
+                // 只留 0/3/6/9 共 4 片，缺 1,2,4,5,7,8 六片
+                int[] bigKeep = new int[] { 0, 3, 6, 9 };
+                for (int i = 0; i < bigKeep.Length; i++)
+                {
+                    File.WriteAllText(Path.Combine(bigStream, bigKeep[i] + ".ts"), "B" + bigKeep[i]);
                 }
                 PatchReport big = SegmentPatcher.Patch(bigDir, true, null);
+                Eq(10, big.Total, "补片上限: 预期 10 片");
+                Eq(6, big.Missing, "补片上限: 缺 6 片");
                 Eq(0, big.Patched, "补片上限: 缺口过半不补");
-                Eq(4, big.Skipped, "补片上限: 放弃 4 片");
+                Eq(6, big.Skipped, "补片上限: 放弃 6 片");
 
-                // 只看缺失率，不再有绝对片数上限：100 片缺 30 片（正好 30%）也要全部补
+                // 只看缺失率，不再有绝对片数上限：100 片缺 50 片（正好 50%）也要全部补
                 string rateDir = Path.Combine(root, "rate");
                 string rateStream = Path.Combine(rateDir, "0____");
                 Directory.CreateDirectory(rateStream);
@@ -146,24 +157,46 @@ namespace Rem.Tests
                 }
                 File.WriteAllText(Path.Combine(rateDir, "raw.m3u8"), m3u.ToString());
                 Eq(100, SegmentPatcher.ExpectedCount(rateDir), "补片比例: 清单 100 片");
-                for (int i = 0; i < 70; i++) File.WriteAllText(Path.Combine(rateStream, i + ".ts"), "R" + i);
+                for (int i = 0; i < 50; i++) File.WriteAllText(Path.Combine(rateStream, i + ".ts"), "R" + i);
 
                 PatchReport rate = SegmentPatcher.Patch(rateDir, true, null);
-                Eq(30, rate.Missing, "补片比例: 缺 30 片");
-                Eq(30, rate.Patched, "补片比例: 缺 30% 也全补，无 20 片硬上限");
+                Eq(50, rate.Missing, "补片比例: 缺 50 片");
+                Eq(50, rate.Patched, "补片比例: 缺 50% 也全补，无片数硬上限");
                 Eq(0, rate.Skipped, "补片比例: 未触发放弃");
                 Eq(100, Directory.GetFiles(rateStream, "*.ts").Length, "补片比例: 已补齐到 100 片");
 
-                // 越过 30% 一线即放弃：100 片缺 31 片
+                // 越过 50% 一线即放弃：100 片缺 51 片
                 string overDir = Path.Combine(root, "over");
                 string overStream = Path.Combine(overDir, "0____");
                 Directory.CreateDirectory(overStream);
                 File.WriteAllText(Path.Combine(overDir, "raw.m3u8"), m3u.ToString());
-                for (int i = 0; i < 69; i++) File.WriteAllText(Path.Combine(overStream, i + ".ts"), "O" + i);
+                for (int i = 0; i < 49; i++) File.WriteAllText(Path.Combine(overStream, i + ".ts"), "O" + i);
 
                 PatchReport over = SegmentPatcher.Patch(overDir, true, null);
-                Eq(0, over.Patched, "补片比例: 缺 31% 不补");
-                Eq(31, over.Skipped, "补片比例: 放弃 31 片");
+                Eq(0, over.Patched, "补片比例: 缺 51% 不补");
+                Eq(51, over.Skipped, "补片比例: 放弃 51 片");
+
+                // 上限可调：100 片缺 30 片（30%），上限收紧到 20% 时整组放弃
+                string customDir = Path.Combine(root, "custom");
+                string customStream = Path.Combine(customDir, "0____");
+                Directory.CreateDirectory(customStream);
+                File.WriteAllText(Path.Combine(customDir, "raw.m3u8"), m3u.ToString());
+                for (int i = 0; i < 70; i++) File.WriteAllText(Path.Combine(customStream, i + ".ts"), "C" + i);
+
+                PatchReport custom = SegmentPatcher.Patch(customDir, true, null, 20);
+                Eq(0, custom.Patched, "补片上限可调: 30% 缺口超 20% 上限不补");
+                Eq(30, custom.Skipped, "补片上限可调: 放弃 30 片");
+
+                // 上限可调：同一场景上限放到 40% 时全部补齐
+                string custom2Dir = Path.Combine(root, "custom2");
+                string custom2Stream = Path.Combine(custom2Dir, "0____");
+                Directory.CreateDirectory(custom2Stream);
+                File.WriteAllText(Path.Combine(custom2Dir, "raw.m3u8"), m3u.ToString());
+                for (int i = 0; i < 70; i++) File.WriteAllText(Path.Combine(custom2Stream, i + ".ts"), "C" + i);
+
+                PatchReport custom2 = SegmentPatcher.Patch(custom2Dir, true, null, 40);
+                Eq(30, custom2.Patched, "补片上限可调: 30% 缺口在 40% 上限内全补");
+                Eq(0, custom2.Skipped, "补片上限可调: 未触发放弃");
             }
             finally
             {
@@ -223,6 +256,12 @@ namespace Rem.Tests
             string s2 = Mask.Secret("-H \"Cookie: SESSDATA=abc123\"");
             Ok(s2.IndexOf("abc123", StringComparison.Ordinal) < 0, "Secret 遮盖 Cookie");
             Eq("plain", Mask.Secret("plain"), "Secret 无敏感项原样返回");
+
+            // 3.6 命令预览打码：正则带 matchTimeout，异常 fail-closed，绝不再回显明文
+            string pv = Mask.Preview("--custom-hls-key ABCDEFGH --custom-hls-iv 00001111 --proxy-a x");
+            Ok(pv.IndexOf("ABCDEFGH", StringComparison.Ordinal) < 0 && pv.IndexOf("00001111", StringComparison.Ordinal) < 0,
+               "Preview 遮盖 KEY/IV 明文");
+            Eq("--custom-hls-key", Mask.Preview("--custom-hls-key"), "Preview 参数缺值时不抛异常也不改写");
         }
 
         // ---------------- Ver ----------------
@@ -374,6 +413,17 @@ namespace Rem.Tests
             Ok(p.PercentInt == 50, "PercentInt 50");
             p.Reset();
             Eq(-1.0, p.Pct, "Reset 回到未开始");
+
+            // 3.1 主干已修，缺回归断言：同一行同时给出分片计数与百分比时，主文案必须以计数为准，
+            // 否则 RE 刷出的子任务 100.0% 会盖掉真实的 2/3，看起来像“已完成却缺片”
+            p.Reset();
+            p.Feed("2/3 90.0%", out spd);
+            Ok(p.MainText.StartsWith("2/3", StringComparison.Ordinal),
+               "MainText 以分片计数打头（Done=2,Total=3 时不显示 90.0%）");
+            p.Reset();
+            p.Feed("5/3 20.0%", out spd);
+            Ok(p.MainText.StartsWith("3/3", StringComparison.Ordinal) && p.PercentInt == 100,
+               "Done 超 Total 时主文案与百分比同步截断到 100%");
         }
 
         private static JVal SafeParse(string t)
@@ -416,6 +466,11 @@ namespace Rem.Tests
             Ok(c.Retries >= 0, "Clamp 重试非负");
             Ok(c.Timeout >= 1, "Clamp 超时下限");
             Ok(c.LogLimit >= 20000, "Clamp 日志上限下限");
+
+            c.PatchPercent = 100; c.Clamp();
+            Eq(70, c.PatchPercent, "Clamp 补片上限最高 70");
+            c.PatchPercent = 0; c.Clamp();
+            Eq(1, c.PatchPercent, "Clamp 补片上限最低 1");
 
             // ---- 解密字段持久化：解密方式固定 AES_128；KEY/IV 只落 DPAPI 加密字段，磁盘上不能见明文 ----
             AppConfig c2 = new AppConfig();
@@ -670,6 +725,22 @@ namespace Rem.Tests
             Eq("BASE64", ArgBuilder.KeyShape("MDEyMzQ1Njc4OWFiY2RlZg=="), "KeyShape Base64");
             Eq("", ArgBuilder.KeyShape("zzz"), "KeyShape 既非 HEX 也非 Base64 返回空");
             Eq("", ArgBuilder.KeyShape(""), "KeyShape 空串返回空");
+
+            // ---- 3.2 分隔符归一：粘贴 KID:KEY 多组写法或带冒号的 HEX 时必须剥冒号后再下发 ----
+            AppConfig d5 = new AppConfig();
+            d5.HlsKey = " ab:cd ";
+            d5.HlsIv = "aa:bb\tcc:dd";
+            d5.Clamp();
+            BuiltArgs b5 = ArgBuilder.Build(d5, "https://a.com/v.m3u8", "C:\\tmp", "v",
+                                            "eng.exe", "", "", null, null);
+            Eq("abcd", ArgVal(b5.Args, "--custom-hls-key"), "解密：KEY 去空白与冒号后下发");
+            Eq("aabbccdd", ArgVal(b5.Args, "--custom-hls-iv"), "解密：IV 去制表符与冒号后下发");
+            AppConfig d6 = new AppConfig();
+            d6.HlsKey = " : ";
+            d6.Clamp();
+            BuiltArgs b6 = ArgBuilder.Build(d6, "https://a.com/v.m3u8", "C:\\tmp", "v",
+                                            "eng.exe", "", "", null, null);
+            Eq("<none>", ArgVal(b6.Args, "--custom-hls-method"), "解密：只填分隔符的 KEY 归一为空，不下发任何解密参数");
         }
     }
 }

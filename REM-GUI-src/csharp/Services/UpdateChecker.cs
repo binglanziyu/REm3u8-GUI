@@ -42,7 +42,7 @@ namespace Rem.Services
         /// <summary>内置默认清单：外部文件与内嵌资源都不可用时的兜底。</summary>
         public const string DefaultJson =
             "{" +
-            "\"version\":\"3.0.1\"," +
+            "\"version\":\"3.1.0\"," +
             "\"notes\":\"C# WinForms 重建版\"," +
             "\"engine\":{\"repo\":\"nilaoda/N_m3u8DL-RE\",\"assetHint\":\"win-x64\"," +
             "\"mirrors\":[\"\",\"https://gh-proxy.com/\"]}," +
@@ -126,8 +126,9 @@ namespace Rem.Services
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return null;
             }
         }

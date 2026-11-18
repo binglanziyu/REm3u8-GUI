@@ -189,7 +189,7 @@ namespace Rem.Engine
             get
             {
                 try { return proc != null && !proc.HasExited; }
-                catch (Exception) { return false; }
+                catch (Exception __ex) { Note.Swallow(__ex); return false; }
             }
         }
 
@@ -199,7 +199,7 @@ namespace Rem.Engine
             {
                 if (proc == null) return true;
                 try { return proc.HasExited; }
-                catch (Exception) { return true; }
+                catch (Exception __ex) { Note.Swallow(__ex); return true; }
             }
         }
 
@@ -217,8 +217,8 @@ namespace Rem.Engine
             // 引擎是控制台程序，stdout/stderr 被重定向后按【系统 OEM 代码页】输出（简中 936）。
             // 早前误用 UTF8 解码，导致日志里中文全成 "����ض���"；日志文件本身是 UTF-8，但管道不是。
             Encoding outEnc = GetConsoleEncoding();
-            try { psi.StandardOutputEncoding = outEnc; } catch (Exception __ex) { Note.Swallow("JobRunner.cs:173", __ex); }
-            try { psi.StandardErrorEncoding = outEnc; } catch (Exception __ex) { Note.Swallow("JobRunner.cs:174", __ex); }
+            try { psi.StandardOutputEncoding = outEnc; } catch (Exception __ex) { Note.Swallow(__ex); }
+            try { psi.StandardErrorEncoding = outEnc; } catch (Exception __ex) { Note.Swallow(__ex); }
 
             proc = new Process();
             proc.StartInfo = psi;
@@ -231,7 +231,7 @@ namespace Rem.Engine
             catch (Exception ex)
             {
                 if (log != null) log.Err("启动引擎失败：" + ex.Message);
-                try { proc.Dispose(); } catch (Exception __ex) { Note.Swallow("JobRunner.cs:187", __ex); } 
+                try { proc.Dispose(); } catch (Exception __ex) { Note.Swallow(__ex); } 
                 proc = null;
                 ExitCode = -1;
                 return false;
@@ -242,7 +242,7 @@ namespace Rem.Engine
 
             // 立刻关掉 stdin：GUI 没有任何交互输入通道，引擎若要选轨/确认会直接读到 EOF 报错退出，
             // 而不是无限期等待（D3）
-            try { proc.StandardInput.Close(); } catch (Exception __ex) { Note.Swallow("JobRunner.cs:203", __ex); }
+            try { proc.StandardInput.Close(); } catch (Exception __ex) { Note.Swallow(__ex); }
 
             job = Native.CreateKillOnCloseJob();
             if (job != IntPtr.Zero)
@@ -251,12 +251,17 @@ namespace Rem.Engine
                 if (!ok && log != null) log.Diag("AssignProcessToJobObject 失败", "JobRunner");
             }
 
-            thOut = new Thread(delegate () { Pump(proc.StandardOutput, false); });
+            // 先取局部 reader 再由闭包捕获：否则 Pump 线程被调度时才解引用 proc 字段，
+            // 与 Dispose 的 proc=null 竞态会抛到后台线程，未处理异常直接崩掉整个进程（D4）
+            TextReader stdOut = proc.StandardOutput;
+            TextReader stdErr = proc.StandardError;
+
+            thOut = new Thread(delegate () { Pump(stdOut, false); });
             thOut.IsBackground = true;
             thOut.Name = "re-stdout";
             thOut.Start();
 
-            thErr = new Thread(delegate () { Pump(proc.StandardError, true); });
+            thErr = new Thread(delegate () { Pump(stdErr, true); });
             thErr.IsBackground = true;
             thErr.Name = "re-stderr";
             thErr.Start();
@@ -284,14 +289,28 @@ namespace Rem.Engine
                 if (cp <= 0) cp = 936;
                 return Encoding.GetEncoding(cp);
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 try { return Encoding.Default; }
-                catch (Exception) { return new UTF8Encoding(false); }
+                catch (Exception __ex2) { Note.Swallow(__ex2); return new UTF8Encoding(false); }
             }
         }
 
         private void Pump(TextReader reader, bool isErr)
+        {
+            try
+            {
+                PumpCore(reader, isErr);
+            }
+            catch (Exception __ex)
+            {
+                // 泵线程的任何未处理异常都会终止整个进程（net48 默认策略），必须兜底留痕（D4）
+                Note.Swallow(__ex);
+            }
+        }
+
+        private void PumpCore(TextReader reader, bool isErr)
         {
             char[] buf = new char[4096];
             StringBuilder sb = new StringBuilder();
@@ -299,7 +318,7 @@ namespace Rem.Engine
             {
                 int n;
                 try { n = reader.Read(buf, 0, buf.Length); }
-                catch (Exception) { break; }
+                catch (Exception __ex) { Note.Swallow(__ex); break; }
                 if (n <= 0) break;
                 for (int i = 0; i < n; i++)
                 {
@@ -340,7 +359,7 @@ namespace Rem.Engine
             {
                 if (line.IndexOf('\u001B') >= 0) line = RxAnsi.Replace(line, "");
             }
-            catch (Exception __ex) { Note.Swallow("JobRunner.cs:292", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             line = line.TrimEnd();
             if (line.Length == 0) return;
 
@@ -353,7 +372,7 @@ namespace Rem.Engine
                     return;
                 }
             }
-            catch (Exception __ex) { Note.Swallow("JobRunner.cs:305", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             Enqueue(line, isErr);
         }
 
@@ -399,18 +418,18 @@ namespace Rem.Engine
                     Native.TerminateJobObject(job, 1);
                 }
             }
-            catch (Exception __ex) { Note.Swallow("JobRunner.cs:349", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             try
             {
                 if (proc != null && !proc.HasExited) proc.Kill();
             }
-            catch (Exception __ex) { Note.Swallow("JobRunner.cs:354", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             try
             {
                 // 强杀后给一个短暂的回收窗口，避免后续 HasExited 仍然为假导致收尾逻辑误判
                 if (proc != null && !proc.HasExited) proc.WaitForExit(2000);
             }
-            catch (Exception __ex) { Note.Swallow("JobRunner.cs:360", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         /// <summary>收尾：等待退出并取退出码。UI 线程调用前应确认 HasExited。</summary>
@@ -422,14 +441,53 @@ namespace Rem.Engine
                 {
                     if (!proc.HasExited)
                     {
-                        try { proc.WaitForExit(5000); } catch (Exception __ex) { Note.Swallow("JobRunner.cs:372", __ex); }
+                        try { proc.WaitForExit(5000); } catch (Exception __ex) { Note.Swallow(__ex); }
                     }
                     // 超时后仍未退出就如实给 -1，不拿“猜的退出码”冒充结果
                     ExitCode = proc.HasExited ? proc.ExitCode : -1;
                 }
             }
-            catch (Exception) { ExitCode = -1; }
+            catch (Exception __ex) { Note.Swallow(__ex); ExitCode = -1; }
             return ExitCode;
+        }
+
+        /// <summary>
+        /// 非阻塞收尾：进程已退出则取退出码并返回 true；仍在跑返回 false，绝不阻塞调用线程。
+        /// UI 线程每拍调一次，替掉原来 Finish() 里最长 5 秒的 WaitForExit（3.5）。
+        /// </summary>
+        public bool TryFinish(out int code)
+        {
+            code = ExitCode;
+            try
+            {
+                if (proc == null) return true;
+                if (!proc.HasExited) return false;
+                ExitCode = proc.ExitCode;
+                code = ExitCode;
+                return true;
+            }
+            catch (Exception __ex)
+            {
+                // 进程对象已回收等异常：按“可收尾”处理，退出码沿用上一次取到的值
+                Note.Swallow(__ex);
+                code = ExitCode;
+                return true;
+            }
+        }
+
+        /// <summary>两个读取线程是否都已读完并退出（收尾阶段非阻塞判定用，替代 Join(500)*2）。</summary>
+        public bool OutputDrained
+        {
+            get
+            {
+                try
+                {
+                    bool a = thOut == null || !thOut.IsAlive;
+                    bool b = thErr == null || !thErr.IsAlive;
+                    return a && b;
+                }
+                catch (Exception __ex) { Note.Swallow(__ex); return true; }
+            }
         }
 
         public bool WasKilled { get { return killed; } }
@@ -441,7 +499,7 @@ namespace Rem.Engine
                 if (thOut != null) thOut.Join(500);
                 if (thErr != null) thErr.Join(500);
             }
-            catch (Exception __ex) { Note.Swallow("JobRunner.cs:391", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             try
             {
                 if (job != IntPtr.Zero)
@@ -450,7 +508,7 @@ namespace Rem.Engine
                     job = IntPtr.Zero;
                 }
             }
-            catch (Exception __ex) { Note.Swallow("JobRunner.cs:400", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             try
             {
                 if (proc != null)
@@ -459,7 +517,7 @@ namespace Rem.Engine
                     proc = null;
                 }
             }
-            catch (Exception __ex) { Note.Swallow("JobRunner.cs:409", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
     }
 }

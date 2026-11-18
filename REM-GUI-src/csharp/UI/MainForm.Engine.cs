@@ -173,7 +173,7 @@ namespace Rem.UI
             open.Click += delegate (object s, EventArgs e)
             {
                 try { using (Process p = Process.Start("explorer.exe", AppPaths.EngineDir)) { } }
-                catch (Exception __ex) { Note.Swallow("MainForm.cs:664", __ex); }
+                catch (Exception __ex) { Note.Swallow(__ex); }
             };
             menu.Items.Add(open);
 
@@ -206,7 +206,7 @@ namespace Rem.UI
             }
             if (state != RunState.Idle)
             {
-                SetStatus("请先停止当前任务", Theme.Orange);
+                SetStatus("请先暂停当前任务", Theme.Orange);
                 return;
             }
             DialogResult r = MessageBox.Show(this,
@@ -282,6 +282,7 @@ namespace Rem.UI
                 }
                 catch (Exception ex)
                 {
+                    Note.Swallow(ex);
                     r = new UpdateResult();
                     r.Message = "检查失败：" + ex.Message;
                 }
@@ -432,6 +433,7 @@ namespace Rem.UI
                 }
                 catch (Exception ex)
                 {
+                    Note.Swallow(ex);
                     err = ex.Message;
                 }
                 installOk = ok;

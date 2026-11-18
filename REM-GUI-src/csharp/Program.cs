@@ -16,7 +16,7 @@ using Rem.Core;
 public static class Program
 {
     /// <summary>应用版本：配置文件、窗口标题、日志首行统一取这里。</summary>
-    public const string Version = "3.0.1";
+    public const string Version = "3.1.0";
 
     /// <summary>单实例互斥体名（Local\ 作用域，多用户会话互不干扰）。</summary>
     private const string MutexName = "Local\\REM-GUI-Single-7F1C4A2E";
@@ -40,8 +40,9 @@ public static class Program
         {
             mutex = new Mutex(true, MutexName, out isFirst);
         }
-        catch (Exception)
+        catch (Exception __ex)
         {
+            Note.Swallow(__ex);
             isFirst = true;
         }
 
@@ -62,8 +63,9 @@ public static class Program
         {
             AppPaths.Init();
         }
-        catch (Exception)
+        catch (Exception __ex)
         {
+            Note.Swallow(__ex);
             // 路径层失败也要让窗体起来，由界面提示
         }
 
@@ -104,11 +106,11 @@ public static class Program
             {
                 if (mutex != null)
                 {
-                    try { mutex.ReleaseMutex(); } catch (Exception __ex) { Note.Swallow("Program.cs:100", __ex); }
+                    try { mutex.ReleaseMutex(); } catch (Exception __ex) { Note.Swallow(__ex); }
                     mutex.Dispose();
                 }
             }
-            catch (Exception __ex) { Note.Swallow("Program.cs:104", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
     }
 
@@ -171,12 +173,12 @@ public static class Program
             const int Tls13 = 12288;
             int flags = Tls12;
             try { flags |= Tls13; }
-            catch (Exception __ex) { Note.Swallow("Program.cs:167", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             ServicePointManager.SecurityProtocol = (SecurityProtocolType)flags;
         }
         catch (Exception)
         {
-            try { ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12; } catch (Exception __ex) { Note.Swallow("Program.cs:172", __ex); }
+            try { ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12; } catch (Exception __ex) { Note.Swallow(__ex); }
         }
         try
         {
@@ -184,7 +186,7 @@ public static class Program
             ServicePointManager.DefaultConnectionLimit = 16;
             ServicePointManager.CheckCertificateRevocationList = false;
         }
-        catch (Exception __ex) { Note.Swallow("Program.cs:180", __ex); }
+        catch (Exception __ex) { Note.Swallow(__ex); }
     }
 
     private static void EnableDpiAwareness()
@@ -195,12 +197,12 @@ public static class Program
             IntPtr r = SetThreadDpiAwarenessContext(new IntPtr(-4));
             if (r != IntPtr.Zero) return;
         }
-        catch (Exception __ex) { Note.Swallow("Program.cs:191", __ex); }
+        catch (Exception __ex) { Note.Swallow(__ex); }
         try
         {
             SetProcessDPIAware();
         }
-        catch (Exception __ex) { Note.Swallow("Program.cs:196", __ex); }
+        catch (Exception __ex) { Note.Swallow(__ex); }
     }
 
     // ========================= 异常 =========================
@@ -233,7 +235,7 @@ public static class Program
                 + firstLine + "\r\n\r\n日志：" + AppPaths.DiagFile,
                 "REM-GUI", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        catch (Exception __ex) { Note.Swallow("Program.cs:229", __ex); }
+        catch (Exception __ex) { Note.Swallow(__ex); }
     }
 
     private static void OnDomainException(object sender, UnhandledExceptionEventArgs e)
@@ -247,7 +249,7 @@ public static class Program
                 "REM-GUI 遇到无法恢复的错误，需要退出。\r\n\r\n详情已写入：" + AppPaths.DiagFile,
                 "REM-GUI", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-        catch (Exception __ex) { Note.Swallow("Program.cs:243", __ex); }
+        catch (Exception __ex) { Note.Swallow(__ex); }
     }
 
     private static void Diag(string msg)
@@ -264,6 +266,6 @@ public static class Program
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [Program] " + msg + "\r\n",
                 new UTF8Encoding(false));
         }
-        catch (Exception __ex) { Note.Swallow("Program.cs:258", __ex); }
+        catch (Exception __ex) { Note.Swallow(__ex); }
     }
 }

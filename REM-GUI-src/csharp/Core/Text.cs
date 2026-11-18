@@ -84,17 +84,19 @@ namespace Rem.Core
     /// <summary>凭证掩码：命令预览、Header 展示一律不出现明文。</summary>
     public static class Mask
     {
+        // 掩码正则全部带 matchTimeout：输入里混有引擎输出/用户文本，
+        // 无超时的正则出问题会永久挂死而不是抛异常；超时会走 Secret 的 fail-closed 兜底（D-MASK-1）
         private static readonly Regex RxHead = new Regex(
             "(?i)(Cookie|Authorization|Proxy-Authorization|X-[A-Za-z0-9\\-_]*(?:Token|Key|Auth|Sign)[A-Za-z0-9\\-_]*)\\s*:\\s*[^\"\\r\\n]*",
-            RegexOptions.Compiled);
-        private static readonly Regex RxUserInfo = new Regex("(?i)([a-z0-9+]+://)[^/\\s@\"]+@", RegexOptions.Compiled);
+            RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+        private static readonly Regex RxUserInfo = new Regex("(?i)([a-z0-9+]+://)[^/\\s@\"]+@", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
         private static readonly Regex RxQuery = new Regex(
-            "(?i)([?&](?:token|sign|signature|auth|auth_key|key|wsSecret|wsTime|expires)=)[^&\\s\"]+", RegexOptions.Compiled);
+            "(?i)([?&](?:token|sign|signature|auth|auth_key|key|wsSecret|wsTime|expires)=)[^&\\s\"]+", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
         // 命令行里的解密密钥：--custom-hls-key / --custom-hls-iv 后面那一段一律打码，
         // 否则命令预览和日志里会把用户手填的 KEY 明文带出去。
         // 解密方式固定 AES_128、--key（KID:KEY 多组）能力已整体移除，规则里不再有 --key 分支
         private static readonly Regex RxArgKey = new Regex(
-            "(?i)(--(?:custom-hls-key|custom-hls-iv)\\s+)(\"[^\"]*\"|[^\\s\"]+)", RegexOptions.Compiled);
+            "(?i)(--(?:custom-hls-key|custom-hls-iv)\\s+)(\"[^\"]*\"|[^\\s\"]+)", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
 
         public static string Secret(string text)
         {
@@ -107,11 +109,32 @@ namespace Rem.Core
                 t = RxQuery.Replace(t, "$1****");
                 t = RxArgKey.Replace(t, "$1****");
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
-                return text;
+                // 打码失败必须 fail-closed：宁可整段退化成 ****，也绝不把未打码明文送出去（D-MASK-1）
+                Note.Swallow(__ex);
+                return "****";
             }
             return t;
+        }
+
+        /// <summary>
+        /// 命令预览专用打码：只处理 --custom-hls-key / --custom-hls-iv 的取值。
+        /// 与 Secret 同一口径（Compiled + matchTimeout + fail-closed），预览不再各写一份正则（3.6）。
+        /// </summary>
+        public static string Preview(string cmd)
+        {
+            if (string.IsNullOrEmpty(cmd)) return "";
+            try
+            {
+                return RxArgKey.Replace(cmd, "$1****");
+            }
+            catch (Exception __ex)
+            {
+                // 打码失败必须 fail-closed：宁可整段退化成 ****，也绝不把未打码明文送上界面（D-MASK-1）
+                Note.Swallow(__ex);
+                return "****";
+            }
         }
 
         /// <summary>逐行打码：已知敏感头用 Secret，其余把冒号后的值换成星号。</summary>
@@ -226,8 +249,9 @@ namespace Rem.Core
                     return sb.ToString();
                 }
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return "";
             }
         }
@@ -244,8 +268,9 @@ namespace Rem.Core
                     return sb.ToString();
                 }
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return "00000000";
             }
         }
@@ -321,8 +346,9 @@ namespace Rem.Core
                     return part;
                 }
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return new byte[0];
             }
         }
@@ -346,7 +372,8 @@ namespace Rem.Core
             return StartsWith(path, PK0, PK1);
         }
 
-        /// <summary>移动并覆盖目标：同卷用 Replace 保证原子性，跨卷退回 Move。</summary>
+        /// <summary>移动并覆盖目标：同卷用 Replace 保证原子性；Replace 失败时先把旧目标暂存旁路，
+        /// 换入失败再还原旧目标——绝不出现「旧的已删、新的没上来」的目标丢失窗口（D-FS-1）。</summary>
         public static bool MoveAtomic(string src, string dst)
         {
             try
@@ -361,14 +388,38 @@ namespace Rem.Core
                     }
                     catch (Exception)
                     {
-                        File.Delete(dst);
+                        // Replace 不可用（跨卷/占用等）：旧目标移旁路 → 换入 → 成功后删旁路，失败则还原
+                        string bak = dst + ".old";
+                        TryDeleteFile(bak);
+                        try
+                        {
+                            File.Move(dst, bak);
+                        }
+                        catch (Exception __ex)
+                        {
+                            Note.Swallow(__ex);
+                            return false; // 旧目标动不了：保持原状退出，绝不先删
+                        }
+                        try
+                        {
+                            File.Move(src, dst);
+                        }
+                        catch (Exception __ex)
+                        {
+                            Note.Swallow(__ex);
+                            try { File.Move(bak, dst); } catch (Exception __ex2) { Note.Swallow(__ex2); }
+                            return false;
+                        }
+                        TryDeleteFile(bak);
+                        return true;
                     }
                 }
                 File.Move(src, dst);
                 return true;
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return false;
             }
         }
@@ -380,7 +431,7 @@ namespace Rem.Core
             {
                 if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) Directory.Delete(dir, true);
             }
-            catch (Exception __ex) { Note.Swallow("Text.cs:357", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         public static void TryDeleteFile(string path)
@@ -389,7 +440,7 @@ namespace Rem.Core
             {
                 if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path);
             }
-            catch (Exception __ex) { Note.Swallow("Text.cs:366", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
     }
 }

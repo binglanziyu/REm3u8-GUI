@@ -58,6 +58,12 @@ namespace Rem.Services
         /// </summary>
         public bool AutoPatch = true;
 
+        /// <summary>
+        /// 自动补片上限（缺失率百分比，1–70，默认 50）：坏片补片时缺失率不超过该比例就用相邻分片顶替补齐，
+        /// 超过就整组放弃并如实报错。高级设置「补片上限」可调，调用方经 SegmentPatcher.Patch 的 maxPercent 传入。
+        /// </summary>
+        public int PatchPercent = 50;
+
         // 系统代理开关（D8）：false = 不使用系统代理（默认值，界面默认不勾），
         // 此时 ArgBuilder 显式下发 --use-system-proxy false；true = 使用系统代理，不下发该参数。
         // 注意：引擎自带默认是 True，所以 false 必须显式写出来才对得上界面。
@@ -80,6 +86,11 @@ namespace Rem.Services
         /// <summary>日志上限的合法区间（字符数），主界面与高级设置共用同一组边界。</summary>
         public const int LogLimitMin = 20000;
         public const int LogLimitMax = 2000000;
+
+        /// <summary>自动补片上限的合法区间（缺失率百分比），高级设置「补片上限」共用同一组边界。
+        /// 最高只放到 70%：缺失过半后邻片顶替会把成片补成大量重复，上限再高只是把“如实报错”拖得更晚。</summary>
+        public const int PatchPercentMin = 1;
+        public const int PatchPercentMax = 70;
 
         /// <summary>把 M/s 数值编译成 N_m3u8DL-RE 认识的形式（8M / 0.5M）；不限速返回空串。</summary>
         public string SpeedArg()
@@ -111,6 +122,8 @@ namespace Rem.Services
             if (Timeout > 600) Timeout = 600;
             if (LogLimit < LogLimitMin) LogLimit = LogLimitMin;
             if (LogLimit > LogLimitMax) LogLimit = LogLimitMax;
+            if (PatchPercent < PatchPercentMin) PatchPercent = PatchPercentMin;
+            if (PatchPercent > PatchPercentMax) PatchPercent = PatchPercentMax;
 
             // 解密相关：空串/空引用一律归一，避免 UI 里 NullReference、命令行里出现空参数
             // 解密方式只剩 AES-128：不论旧配置里存了什么（自动识别/ SAMPLE_AES / CENC …），一律拉回 AES_128
@@ -192,6 +205,7 @@ namespace Rem.Services
                 c.CheckSegments = j.GetBool("checkSegments", c.CheckSegments);
                 c.AutoSelect = j.GetBool("autoSelect", c.AutoSelect);
                 c.AutoPatch = j.GetBool("autoPatch", c.AutoPatch);
+                c.PatchPercent = j.GetInt("patchPercent", c.PatchPercent);
                 c.UseSystemProxy = j.GetBool("useSystemProxy", c.UseSystemProxy);
                 c.EngineSel = j.GetStr("engineSel", c.EngineSel);
                 c.EngineExt = j.GetStr("engineExt", c.EngineExt);
@@ -253,8 +267,9 @@ namespace Rem.Services
                     legacy.TrimEnd('\\', '/'),
                     StringComparison.OrdinalIgnoreCase);
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return false;
             }
         }
@@ -270,7 +285,7 @@ namespace Rem.Services
                 File.Copy(path, bak, true);
                 if (log != null) log.Warn(">> 配置文件无法解析，已备份为 " + Path.GetFileName(bak));
             }
-            catch (Exception __ex) { Note.Swallow("Config.cs:153", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         public static void Save(string path, AppConfig c)
@@ -327,6 +342,7 @@ namespace Rem.Services
                 j.Set("checkSegments", c.CheckSegments);
                 j.Set("autoSelect", c.AutoSelect);
                 j.Set("autoPatch", c.AutoPatch);
+                j.Set("patchPercent", c.PatchPercent);
                 j.Set("useSystemProxy", c.UseSystemProxy);
                 j.Set("engineSel", c.EngineSel);
                 j.Set("engineExt", c.EngineExt);
@@ -368,7 +384,7 @@ namespace Rem.Services
                 if (!double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) || v <= 0) return;
                 c.SpeedMB = Math.Round(v * scale, 3, MidpointRounding.AwayFromZero);
             }
-            catch (Exception __ex) { Note.Swallow("Config.cs:243", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         private static string Protect(string text)
@@ -380,8 +396,9 @@ namespace Rem.Services
                 byte[] enc = ProtectedData.Protect(raw, null, DataProtectionScope.CurrentUser);
                 return Convert.ToBase64String(enc);
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return "";
             }
         }
