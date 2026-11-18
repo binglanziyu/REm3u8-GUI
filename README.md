@@ -4,7 +4,7 @@
 
 **把 N_m3u8DL-RE 的参数表，变成一张能看懂的表单。**
 
-![Version](https://img.shields.io/badge/version-3.0.1-2ea043?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.1.0-2ea043?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square)
 ![Runtime](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)
@@ -27,12 +27,15 @@ REm3u8-GUI 是 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) 的 Windows
 | **单实例接管** | 重复双击不会开出两个窗口，新链接直接转交给已运行的实例排队 |
 | **高 DPI 适配** | PerMonitorV2 感知，界面按实际 DPI 等比缩放，跨显示器拖动不糊不错位 |
 | **崩溃留证** | 未捕获异常写进 `logs\diag.log` 并弹窗告知路径，不是无声消失 |
+| **诊断日志可查** | 界面直接给「诊断日志」入口，`logs\diag.log` 按 2 MB 滚动，记录被忽略异常的出处与收尾动作 |
 
 ### 下载链路
 
 | 能力 | 说明 |
 |:--|:--|
-| **坏片自动补片** | 引擎报分片校验不通过或合并失败时两段自救：先重拉清单续跑补齐真分片，仍缺则用前后相邻分片顶替让它能合并；缺口占比超过 30% 才放弃补片并如实报错，比例以内一律补，不设绝对片数上限 |
+| **坏片自动补片** | 引擎报分片校验不通过或合并失败时两段自救：先重拉清单续跑补齐真分片，仍缺则用前后相邻分片顶替让它能合并；放弃阈值可调（1%–70%，默认 50%，即缺口超过阈值才放弃补片并如实报错），阈值以内一律补，不设绝对片数上限 |
+| **暂停与继续** | 下载途中可暂停，分片与 `.resume.json` 原地保留，按钮当场变绿成「继续」，点它接着下；失败后同样可继续，不必再把续传文件拖回窗口 |
+| **成功即清理** | 成功后删续传文件，并清掉 `.parts\` 分片目录与分离轨中间文件（`.m4s` / `.ts` / `.aac` 等）；同名音轨只在成品 mp4 确实存在时才删，成品没落盘一律保留 |
 | **失败判定不只看退出码** | 引擎在某些情况下退出码为 0 但日志已报错，这类任务会被识别为失败，不会当成完成去清掉续传文件与分片 |
 | **断点续传** | 中断后把 `.resume.json` 拖回窗口即可续传；分片目录已被清空时明确告知将从头下载，而不是在空目录里假装续传出 0 个分片 |
 | **多码率选择** | 预检发现多清晰度清单时给出可选列表，选定后再进入下载 |
@@ -71,11 +74,12 @@ REm3u8-GUI 是 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) 的 Windows
 
 | 版本 | 文件 | 大小 | 形态 |
 |:--|:--|:--|:--|
+| v3.1.0 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.0/REM-GUI.exe) | 24.00 MB | 单文件免安装，引擎与 FFmpeg 已内置（新增暂停与继续、可调补片上限、诊断日志入口，修复十余项缺陷） |
 | v3.0.1 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.1/REM-GUI.exe) | 23.99 MB | 单文件免安装，引擎与 FFmpeg 已内置（修复进度读数误判、失败误判成功、完成提醒增强） |
 | v3.0.0 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.0/REM-GUI.exe) | 23.98 MB | 单文件免安装，引擎与 FFmpeg 已内置 |
 
-- 直链（复制到下载工具即可）：`https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.1/REM-GUI.exe`
-- 全部版本与更新记录见 [Releases](https://github.com/binglanziyu/REm3u8-GUI/releases)。国内访问慢可走 [ghproxy 镜像](https://ghproxy.net/https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.1/REM-GUI.exe)。
+- 直链（复制到下载工具即可）：`https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.0/REM-GUI.exe`
+- 全部版本与更新记录见 [Releases](https://github.com/binglanziyu/REm3u8-GUI/releases)。国内访问慢可走 [ghproxy 镜像](https://ghproxy.net/https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.0/REM-GUI.exe)。
 - 免安装、免 .NET SDK、免额外附件：双击即用，配置与日志写在程序目录。仅支持 Windows 10 / 11，需要 .NET Framework 4.8（系统自带）。
 
 ## 快速开始
@@ -111,7 +115,7 @@ REm3u8-GUI 是 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) 的 Windows
 # 仅语法语义检查，不产出 exe
 powershell -ExecutionPolicy Bypass -File .\REM-GUI-src\build_csharp.ps1 -CheckOnly
 
-# 单元测试（198 条纯逻辑断言）
+# 单元测试（214 条纯逻辑断言）
 powershell -ExecutionPolicy Bypass -File .\REM-GUI-src\build_csharp.ps1 -Test
 
 # 正式构建，产物为 dist\REM-GUI.exe
@@ -130,7 +134,7 @@ powershell -ExecutionPolicy Bypass -File .\REM-GUI-src\tools\smoke_test.ps1
 powershell -ExecutionPolicy Bypass -File .\REM-GUI-src\tools\e2e_test.ps1
 ```
 
-> 只想用成品不必构建，直接取 [REM-GUI.exe v3.0.1](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.1/REM-GUI.exe)；需要改代码或自行验证构建链路时，再按上面的步骤来。
+> 只想用成品不必构建，直接取 [REM-GUI.exe v3.1.0](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.0/REM-GUI.exe)；需要改代码或自行验证构建链路时，再按上面的步骤来。
 
 ## 目录结构
 
