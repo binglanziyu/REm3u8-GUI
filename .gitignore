@@ -14,6 +14,10 @@ dist/logs/
 # ---------- 备份 / 断点续传残留 ----------
 *.bak
 *.bak?
+# 带时间戳的迭代备份（REM-GUI-src.bak.20261118_211630 这类），统一归档在项目外
+*.bak.*
+REM-GUI-src.bak.*/
+REm3u8-GUI-fixed/
 *.resume.json
 *.tmp
 
