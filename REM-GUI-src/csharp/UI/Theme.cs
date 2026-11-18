@@ -10,6 +10,7 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
+using Rem.Core;
 
 namespace Rem.UI
 {
@@ -139,8 +140,9 @@ namespace Rem.UI
                         made = new Font(FontFamily.GenericSansSerif, size, style);
                     }
                 }
-                catch (Exception)
+                catch (Exception __ex)
                 {
+                    Note.Swallow(__ex);
                     made = new Font(FontFamily.GenericSansSerif, size, style);
                 }
                 fontCache[key] = made;
@@ -212,6 +214,17 @@ namespace Rem.UI
             if (on) forcedToggles.Add(c);
             else forcedToggles.Remove(c);
             PaintToggle(c);
+        }
+
+        /// <summary>
+        /// 把控件从「锁定」「强制开启」两张静态表里彻底摘掉。
+        /// 两张表是 static，此前只在构造期增删，窗体一关就变成对已释放 CheckBox 的永久强引用（3.4）。
+        /// </summary>
+        public static void ReleaseToggle(CheckBox c)
+        {
+            if (c == null) return;
+            lockedToggles.Remove(c);
+            forcedToggles.Remove(c);
         }
 
         /// <summary>开关上色：绿底=开启、暗底=关闭、暗橙底+橙字=互斥锁定、亮绿描边=强制开启。</summary>
@@ -287,13 +300,16 @@ namespace Rem.UI
             TextBox t = new TextBox();
             t.Multiline = true;
             t.WordWrap = false;
-            t.ScrollBars = ScrollBars.None;
+            // 超长行要能横向看：开原生横向条（竖条仍由 ThinScroll 自绘并隐藏原生竖条）
+            t.ScrollBars = ScrollBars.Horizontal;
             t.BorderStyle = BorderStyle.None;
             t.BackColor = Field;
             t.ForeColor = Text;
             t.Font = mono ? Mono(fontSize) : Ui(fontSize);
             t.Location = new Point(S(padLeft), S(padV));
             t.Size = new Size(S(w) - S(padLeft) - S(padRight), S(h) - S(padV) * 2);
+            // 原生横向条套 DarkMode 主题，避免浅色条在深绿底上跳色
+            Rem.Interop.Native.ApplyDarkScrollBar(t.Handle);
 
             FieldFrame frame = new FieldFrame(t);
             frame.Location = new Point(S(x), S(y));

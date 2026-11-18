@@ -162,12 +162,18 @@ namespace Rem.Core
         public string ToJson()
         {
             StringBuilder sb = new StringBuilder();
-            Write(sb);
+            Write(sb, 0);
             return sb.ToString();
         }
 
-        private void Write(StringBuilder sb)
+        // 递归深度上限：恶意/畸形深层嵌套（如 [[[[…]]]]）会打爆线程栈，
+        // 而 StackOverflowException 在 .NET Framework 上不可捕获、进程直接终止，
+        // 必须在递归入口截断。解析与序列化共用同一上限（D-JSON-1）
+        private const int MaxDepth = 256;
+
+        private void Write(StringBuilder sb, int depth)
         {
+            if (depth > MaxDepth) { sb.Append("null"); return; }
             switch (Kind)
             {
                 case JKind.Null:
@@ -196,7 +202,7 @@ namespace Rem.Core
                         for (int i = 0; i < Arr.Count; i++)
                         {
                             if (i > 0) sb.Append(',');
-                            if (Arr[i] == null) sb.Append("null"); else Arr[i].Write(sb);
+                            if (Arr[i] == null) sb.Append("null"); else Arr[i].Write(sb, depth + 1);
                         }
                     }
                     sb.Append(']');
@@ -212,7 +218,7 @@ namespace Rem.Core
                             first = false;
                             WriteStr(sb, kv.Key);
                             sb.Append(':');
-                            if (kv.Value == null) sb.Append("null"); else kv.Value.Write(sb);
+                            if (kv.Value == null) sb.Append("null"); else kv.Value.Write(sb, depth + 1);
                         }
                     }
                     sb.Append('}');
@@ -258,7 +264,7 @@ namespace Rem.Core
         {
             if (text == null) return Null();
             int i = 0;
-            JVal v = ParseValue(text, ref i);
+            JVal v = ParseValue(text, ref i, 0);
             return v == null ? Null() : v;
         }
 
@@ -272,13 +278,15 @@ namespace Rem.Core
             }
         }
 
-        private static JVal ParseValue(string t, ref int i)
+        private static JVal ParseValue(string t, ref int i, int depth)
         {
+            // 深度截断：超限按 null 处理，绝不继续递归（D-JSON-1）
+            if (depth > MaxDepth) return Null();
             SkipWs(t, ref i);
             if (i >= t.Length) return Null();
             char c = t[i];
-            if (c == '{') return ParseObject(t, ref i);
-            if (c == '[') return ParseArray(t, ref i);
+            if (c == '{') return ParseObject(t, ref i, depth + 1);
+            if (c == '[') return ParseArray(t, ref i, depth + 1);
             if (c == '"') return Of(ParseString(t, ref i));
             if (c == 't' && i + 3 < t.Length && t.Substring(i, 4) == "true") { i += 4; return Of(true); }
             if (c == 'f' && i + 4 < t.Length && t.Substring(i, 5) == "false") { i += 5; return Of(false); }
@@ -291,7 +299,7 @@ namespace Rem.Core
             return num;
         }
 
-        private static JVal ParseObject(string t, ref int i)
+        private static JVal ParseObject(string t, ref int i, int depth)
         {
             JVal o = NewObj();
             i++; // {
@@ -305,7 +313,7 @@ namespace Rem.Core
                 string key = ParseString(t, ref i);
                 SkipWs(t, ref i);
                 if (i < t.Length && t[i] == ':') i++;
-                JVal v = ParseValue(t, ref i);
+                JVal v = ParseValue(t, ref i, depth);
                 o.Set(key, v);
                 // 游标停滞保护：一整轮没有前进说明遇上了解析不了的畸形片段，
                 // 直接结束并返回已解析部分，绝不让主线程卡在这（D2）
@@ -314,7 +322,7 @@ namespace Rem.Core
             return o;
         }
 
-        private static JVal ParseArray(string t, ref int i)
+        private static JVal ParseArray(string t, ref int i, int depth)
         {
             JVal a = NewArr();
             i++; // [
@@ -325,7 +333,7 @@ namespace Rem.Core
                 if (i >= t.Length) break;
                 if (t[i] == ']') { i++; break; }
                 if (t[i] == ',') { i++; continue; }
-                a.Add(ParseValue(t, ref i));
+                a.Add(ParseValue(t, ref i, depth));
                 if (i <= loopStart) { i = t.Length; break; }
             }
             return a;

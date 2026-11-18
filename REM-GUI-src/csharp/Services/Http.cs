@@ -45,8 +45,9 @@ namespace Rem.Services
                 }
                 return wp;
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return null;
             }
         }
@@ -72,6 +73,13 @@ namespace Rem.Services
 
         public static string GetText(string url, AppConfig cfg, int timeoutMs, out int status, out long elapsedMs)
         {
+            return GetText(url, cfg, timeoutMs, 0, out status, out elapsedMs);
+        }
+
+        /// <summary>读取文本响应。maxChars &gt; 0 时最多读该字符数即停，
+        /// 防止预检碰到直链大文件时把整个响应体读进内存（D-HTTP-1）。</summary>
+        public static string GetText(string url, AppConfig cfg, int timeoutMs, int maxChars, out int status, out long elapsedMs)
+        {
             status = 0;
             Stopwatch sw = Stopwatch.StartNew();
             elapsedMs = 0;
@@ -84,7 +92,25 @@ namespace Rem.Services
                     using (Stream s = resp.GetResponseStream())
                     using (StreamReader sr = new StreamReader(s, Encoding.UTF8, true))
                     {
-                        string text = sr.ReadToEnd();
+                        string text;
+                        if (maxChars <= 0)
+                        {
+                            text = sr.ReadToEnd();
+                        }
+                        else
+                        {
+                            char[] cbuf = new char[8192];
+                            StringBuilder sb = new StringBuilder();
+                            while (sb.Length < maxChars)
+                            {
+                                int want = cbuf.Length;
+                                if (maxChars - sb.Length < want) want = maxChars - sb.Length;
+                                int n = sr.Read(cbuf, 0, want);
+                                if (n <= 0) break;
+                                sb.Append(cbuf, 0, n);
+                            }
+                            text = sb.ToString();
+                        }
                         sw.Stop();
                         elapsedMs = sw.ElapsedMilliseconds;
                         return text;
@@ -96,13 +122,14 @@ namespace Rem.Services
                 sw.Stop();
                 elapsedMs = sw.ElapsedMilliseconds;
                 HttpWebResponse r = wex.Response as HttpWebResponse;
-                if (r != null) { status = (int)r.StatusCode; try { r.Close(); } catch (Exception __ex) { Note.Swallow("Http.cs:99", __ex); } }
+                if (r != null) { status = (int)r.StatusCode; try { r.Close(); } catch (Exception __ex) { Note.Swallow(__ex); } }
                 else status = -1;
                 lastError = "web: " + wex.Status + " / " + wex.Message;
                 return null;
             }
             catch (Exception ex)
             {
+                Note.Swallow(ex);
                 sw.Stop();
                 elapsedMs = sw.ElapsedMilliseconds;
                 status = -1;
@@ -145,13 +172,14 @@ namespace Rem.Services
                 sw.Stop();
                 elapsedMs = sw.ElapsedMilliseconds;
                 HttpWebResponse r = wex.Response as HttpWebResponse;
-                if (r != null) { status = (int)r.StatusCode; try { r.Close(); } catch (Exception __ex) { Note.Swallow("Http.cs:148", __ex); } }
+                if (r != null) { status = (int)r.StatusCode; try { r.Close(); } catch (Exception __ex) { Note.Swallow(__ex); } }
                 else status = -1;
                 lastError = "web: " + wex.Status + " / " + wex.Message;
                 return null;
             }
             catch (Exception ex)
             {
+                Note.Swallow(ex);
                 sw.Stop();
                 elapsedMs = sw.ElapsedMilliseconds;
                 status = -1;
@@ -192,18 +220,18 @@ namespace Rem.Services
                         else if (string.Equals(key, "Cookie", StringComparison.OrdinalIgnoreCase)) req.Headers[HttpRequestHeader.Cookie] = val;
                         else req.Headers[key] = val;
                     }
-                    catch (Exception __ex) { Note.Swallow("Http.cs:195", __ex); }
+                    catch (Exception __ex) { Note.Swallow(__ex); }
                 }
                 // 只想要响应头：带 Range 的请求不回整包，避免预检把一整个分片拉下来
                 if (!hasRange)
                 {
-                    try { req.AddRange(0, 0); } catch (Exception __ex) { Note.Swallow("Http.cs:200", __ex); }
+                    try { req.AddRange(0, 0); } catch (Exception __ex) { Note.Swallow(__ex); }
                 }
 
                 using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                 {
                     int code = (int)resp.StatusCode;
-                    try { resp.Close(); } catch (Exception __ex) { Note.Swallow("Http.cs:206", __ex); }
+                    try { resp.Close(); } catch (Exception __ex) { Note.Swallow(__ex); }
                     // 206 是对分段请求的正常回应，归一成 200 便于上层统一判断
                     return code == 206 ? 200 : code;
                 }
@@ -211,11 +239,12 @@ namespace Rem.Services
             catch (WebException wex)
             {
                 HttpWebResponse r = wex.Response as HttpWebResponse;
-                if (r != null) { int code = (int)r.StatusCode; try { r.Close(); } catch (Exception __ex) { Note.Swallow("Http.cs:214", __ex); } return code; }
+                if (r != null) { int code = (int)r.StatusCode; try { r.Close(); } catch (Exception __ex) { Note.Swallow(__ex); } return code; }
                 return -1;
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return -1;
             }
         }
@@ -271,6 +300,7 @@ namespace Rem.Services
             }
             catch (Exception ex)
             {
+                Note.Swallow(ex);
                 error = ex.Message;
                 Fs.TryDeleteFile(part);
                 return false;

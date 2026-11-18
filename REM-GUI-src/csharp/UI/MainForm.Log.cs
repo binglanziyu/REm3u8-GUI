@@ -18,8 +18,14 @@ namespace Rem.UI
 {
     public sealed partial class MainForm : Form
     {
+        // 日志渲染积压：每拍最多渲染 LogFlushPerTick 行，余量留到下一拍继续，
+        // 防止 UI 卡顿恢复后一次性灌入上万行把 RTF 解析打满、反而继续恶化积压（D-LOG-1）
+        private const int LogFlushPerTick = 300;
+        private readonly List<LogItem> logBacklog = new List<LogItem>();
+
         private void ClearLog()
         {
+            logBacklog.Clear();
             txtLog.Clear();
             logLines = 0;
         }
@@ -51,7 +57,7 @@ namespace Rem.UI
                 for (int i = 0; i < files.Length; i++)
                 {
                     try { File.Delete(files[i]); n++; }
-                    catch (Exception __ex) { Note.Swallow("MainForm.cs:850", __ex); }
+                    catch (Exception __ex) { Note.Swallow(__ex); }
                 }
                 log.Ok(">> 已清理 " + n + " 个日志文件");
                 SetStatus("已清理 " + n + " 个日志文件");
@@ -132,24 +138,33 @@ namespace Rem.UI
         private void FlushLog()
         {
             if (txtLog == null || txtLog.IsDisposed) return;
-            List<LogItem> items = log.Drain();
-            if (items == null) return;
+            if (logBacklog.Count == 0)
+            {
+                List<LogItem> items = log.Drain();
+                if (items == null) return;
+                logBacklog.AddRange(items);
+            }
+            if (logBacklog.Count == 0) return;
+
+            int take = logBacklog.Count;
+            if (take > LogFlushPerTick) take = LogFlushPerTick;
 
             bool nearBottom = IsNearBottom();
             Native.SetRedraw(txtLog.Handle, false);
             txtLog.SuspendLayout();
             try
             {
-                for (int i = 0; i < items.Count; i++)
+                for (int i = 0; i < take; i++)
                 {
                     txtLog.SelectionStart = txtLog.TextLength;
                     txtLog.SelectionLength = 0;
-                    txtLog.SelectionColor = items[i].Argb == Colors.Default
+                    txtLog.SelectionColor = logBacklog[i].Argb == Colors.Default
                         ? Color.FromArgb(214, 216, 220)
-                        : Color.FromArgb(items[i].Argb);
-                    txtLog.AppendText(items[i].Text + "\n");
+                        : Color.FromArgb(logBacklog[i].Argb);
+                    txtLog.AppendText(logBacklog[i].Text + "\n");
                     logLines++;
                 }
+                logBacklog.RemoveRange(0, take);
                 TrimLog();
             }
             finally
@@ -162,20 +177,59 @@ namespace Rem.UI
             UpdateLogUse();
         }
 
+        /// <summary>打开诊断日志（重构方案第 4 章 E3）：让"程序吞了个异常"变成用户够得着的一份文件。</summary>
+        private void OnOpenDiag()
+        {
+            string path = AppPaths.DiagFile;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                SetStatus("本次会话没有内部异常记录");
+                return;
+            }
+            try
+            {
+                System.Diagnostics.Process.Start(path);
+                SetStatus("已打开诊断日志：" + path);
+            }
+            catch (Exception ex)
+            {
+                // 没有 .log 关联程序时退化为打开所在目录，保证入口始终有效
+                Note.Swallow(ex);
+                try
+                {
+                    using (System.Diagnostics.Process p = System.Diagnostics.Process.Start("explorer.exe", AppPaths.LogDir)) { }
+                }
+                catch (Exception ex2) { Note.Swallow(ex2); }
+                SetStatus("已打开日志目录：" + AppPaths.LogDir);
+            }
+        }
+
+        /// <summary>诊断入口的条数提示（不占布局，挂在悬浮提示上）</summary>
+        private void UpdateDiagUse()
+        {
+            if (tip == null || lnkDiag == null || lnkDiag.IsDisposed) return;
+            int n = Logger.DiagCount;
+            if (n <= 0) tip.SetToolTip(lnkDiag, "本次会话没有内部异常记录\r\n点击查看诊断日志（diag.log）");
+            else tip.SetToolTip(lnkDiag, "本次会话已记录 " + n + " 条内部异常（已写入 diag.log）\r\n点击查看诊断日志");
+        }
+
         /// <summary>日志用量提示（旧版 lblLogUse 的回退项，这里挂在“清理日志”的悬浮提示上，不占布局）。</summary>
         private void UpdateLogUse()
         {
             if (tip == null || lnkClean == null || lnkClean.IsDisposed) return;
             int max = cfg != null && cfg.LogLimit > 0 ? cfg.LogLimit : 200000;
             tip.SetToolTip(lnkClean, "当前显示 " + logLines + " 行 / 上限 " + max + " 字符（超出裁剪最早部分）\r\n点击删除历史日志文件，当前会话保留");
+            UpdateDiagUse();
         }
 
         private void TrimLog()
         {
             // 上限取自配置（LogLimit 为字符数，0 或负数时回落到 20 万字符）
+            // 触发阈值放宽到 max + max/2：裁剪是 O(全文) 的 RTF 重排，
+            // 按 2 万一裁频率太高（每 2 万新字符就重排一次全量缓冲）（D-LOG-1）
             int max = cfg != null && cfg.LogLimit > 0 ? cfg.LogLimit : 200000;
             int len = txtLog.TextLength;
-            if (len <= max + 20000) return;
+            if (len <= max + max / 2) return;
             int cutAt = len - max;
             int line = txtLog.GetLineFromCharIndex(cutAt);
             int cut = txtLog.GetFirstCharIndexFromLine(line);
@@ -192,7 +246,7 @@ namespace Rem.UI
                 Point p = txtLog.GetPositionFromCharIndex(txtLog.TextLength);
                 return p.Y <= txtLog.ClientSize.Height + 20;
             }
-            catch (Exception) { return true; }
+            catch (Exception __ex) { Note.Swallow(__ex); return true; }
         }
 
         private void ScrollToEnd()
@@ -203,7 +257,7 @@ namespace Rem.UI
                 txtLog.SelectionLength = 0;
                 txtLog.ScrollToCaret();
             }
-            catch (Exception __ex) { Note.Swallow("MainForm.cs:1321", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
     }
 }

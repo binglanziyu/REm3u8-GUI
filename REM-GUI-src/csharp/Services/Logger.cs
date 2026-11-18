@@ -27,6 +27,14 @@ namespace Rem.Services
         // 落盘整体失效（目录不可写、磁盘满等）时置真：界面据此常驻提示"日志未落盘"（D18）
         private volatile bool diskBroken = false;
 
+        // 诊断日志保留策略：单文件超过 2 MB 即滚动为 diag.1.log，防止长跑用户日志无限增长（重构方案第 4 章 E4）
+        private const long DiagMaxBytes = 2L * 1024 * 1024;
+        // 诊断日志累计条数：界面据此显示"本次会话已记录 N 条内部错误"（重构方案第 4 章 E3）
+        private static int diagCount = 0;
+
+        /// <summary>本次会话已写入诊断日志的条数（去重后真正落盘的那部分）。</summary>
+        public static int DiagCount { get { return diagCount; } }
+
         public string FilePath { get { return filePath; } }
 
         /// <summary>日志文件是否已无法写入（true = 只有界面日志，磁盘上没有会话日志）。</summary>
@@ -42,7 +50,7 @@ namespace Rem.Services
             {
                 try
                 {
-                    if (file != null) { try { file.Flush(); file.Close(); } catch (Exception __ex) { Note.Swallow("Logger.cs:39", __ex); } file = null; }
+                    if (file != null) { try { file.Flush(); file.Close(); } catch (Exception __ex) { Note.Swallow(__ex); } file = null; }
                     filePath = path;
                     // 目录被手工删掉（dist\logs）时自己补建，别让整个会话日志静默失效
                     string dir = Path.GetDirectoryName(path);
@@ -68,7 +76,7 @@ namespace Rem.Services
             {
                 if (file != null)
                 {
-                    try { file.Flush(); file.Close(); } catch (Exception __ex) { Note.Swallow("Logger.cs:60", __ex); }
+                    try { file.Flush(); file.Close(); } catch (Exception __ex) { Note.Swallow(__ex); }
                     file = null;
                 }
             }
@@ -95,7 +103,7 @@ namespace Rem.Services
                     catch (Exception ex)
                     {
                         // 写盘失败就把句柄扔掉，别让后续每一行都白抛一次异常
-                        try { file.Close(); } catch (Exception __ex) { Note.Swallow("Logger.cs:85", __ex); }
+                        try { file.Close(); } catch (Exception __ex) { Note.Swallow(__ex); }
                         file = null;
                         diskBroken = true;
                         Diag("写会话日志失败，已停止落盘：" + ex.Message, "Logger.Add");
@@ -128,19 +136,23 @@ namespace Rem.Services
             {
                 if (file != null)
                 {
-                    try { file.Flush(); } catch (Exception __ex) { Note.Swallow("Logger.cs:117", __ex); }
+                    try { file.Flush(); } catch (Exception __ex) { Note.Swallow(__ex); }
                 }
             }
         }
 
-        /// <summary>诊断日志：同一条目 5 秒内去重，避免刷盘。</summary>
+        /// <summary>
+        /// 诊断日志：同一条目 5 秒内去重，避免刷盘。
+        /// 去重键取「tag + 消息前 60 字」——消息里已带异常类型名（Note.Sink 注入时拼成
+        /// "[swallow] tag :: 类型: 消息"），故不同类型异常不会被同一 tag 折叠成一条。
+        /// </summary>
         public void Diag(string msg, string tag)
         {
             try
             {
                 // 诊断日志同样过掩码：历史上的 diag.log 里出现过明文 HLS 密钥串
                 msg = Mask.Secret(msg);
-                string key = (tag == null ? "" : tag) + "|" + msg;
+                string key = (tag == null ? "" : tag) + "|" + Head60(msg);
                 DateTime now = DateTime.Now;
                 lock (gate)
                 {
@@ -154,10 +166,35 @@ namespace Rem.Services
                 }
                 string target = AppPaths.DiagFile;
                 if (string.IsNullOrEmpty(target)) return;   // 目录初始化失败时不要把诊断也一起吞成异常
+                RotateDiag(target);
                 string line = now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [" + (tag == null ? "diag" : tag) + "] " + msg + "\r\n";
                 File.AppendAllText(target, line, Encoding.UTF8);
+                System.Threading.Interlocked.Increment(ref diagCount);
             }
-            catch (Exception __ex) { Note.Swallow("Logger.cs:144", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
+        }
+
+        /// <summary>去重键只取消息前 60 字：尾部差异（时间戳、行号、临时路径）不该另开一条。</summary>
+        private static string Head60(string msg)
+        {
+            if (msg == null) return "";
+            if (msg.Length <= 60) return msg;
+            return msg.Substring(0, 60);
+        }
+
+        /// <summary>diag.log 超过 2 MB 时滚动为同目录 diag.1.log（旧档直接覆盖，只保留一代）。</summary>
+        private static void RotateDiag(string path)
+        {
+            FileInfo fi = new FileInfo(path);
+            if (!fi.Exists || fi.Length < DiagMaxBytes) return;
+            string dir = Path.GetDirectoryName(path);
+            string bak = Path.Combine(dir, "diag.1.log");
+            try
+            {
+                if (File.Exists(bak)) File.Delete(bak);
+                File.Move(path, bak);
+            }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
     }
 }

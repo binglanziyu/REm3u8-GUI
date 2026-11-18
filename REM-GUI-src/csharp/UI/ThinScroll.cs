@@ -25,6 +25,15 @@ namespace Rem.UI
         private int first = 0;
         private int visible = 1;
 
+        // Sync 节流：TextChanged 在单拍灌几百行日志时会连着触发几百次，
+        // 每次都量行高 + 重算几何 + Invalidate，足以把 UI 线程压满（3.3）
+        private const int SyncMinGapMs = 30;
+        private int lastSyncTick = 0;
+
+        // 行高只随字体变化：按字体指纹缓存，免掉每次 Sync 都做一次 GDI 文本测量
+        private string lhKey = "";
+        private int lhCached = 0;
+
         private bool hotThumb = false;
         private bool dragging = false;
         private int dragStartY = 0;
@@ -56,7 +65,8 @@ namespace Rem.UI
 
             poll = new Timer();
             poll.Interval = 80;
-            poll.Tick += delegate (object s, EventArgs e) { if (Visible) { Sync(); } };
+            // 轮询是节流的兜底通道：被 30ms 门限挡掉的中间态，最迟 80ms 后由这里补一次完整同步
+            poll.Tick += delegate (object s, EventArgs e) { if (Visible) { Sync(true); } };
             poll.Start();
 
             target.HandleCreated += delegate (object s, EventArgs e) { Attach(); };
@@ -75,10 +85,10 @@ namespace Rem.UI
             try
             {
                 Native.HideScrollBar(target.Handle);
-                Sync();
+                Sync(true);
                 Invalidate();
             }
-            catch (Exception __ex) { Note.Swallow("ThinScroll.cs:Attach", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         private void ReAlign()
@@ -92,25 +102,44 @@ namespace Rem.UI
                 if (Location.X != x || Location.Y != y) { Location = new Point(x, y); }
                 if (Height != target.Height) { Height = target.Height; }
             }
-            catch (Exception __ex) { Note.Swallow("ThinScroll.cs:ReAlign", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         // ---------------- 滚动位置同步 ----------------
 
         private int LineHeight()
         {
+            string key = "";
+            try { key = target.Font == null ? "" : target.Font.ToString(); }
+            catch (Exception __ex) { Note.Swallow(__ex); key = ""; }
+            if (key.Length > 0 && lhCached > 0 && key == lhKey) return lhCached;
+
             int h = 16;
             try
             {
                 h = TextRenderer.MeasureText("Xg", target.Font).Height;
             }
-            catch (Exception __ex) { Note.Swallow("ThinScroll.cs:LineHeight", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             if (h < 6) { h = 6; }
+            if (key.Length > 0) { lhKey = key; lhCached = h; }
             return h;
         }
 
-        private void Sync()
+        private void Sync() { Sync(false); }
+
+        /// <summary>
+        /// force=true 跳过节流（轮询 Timer / Attach 用）。同步的读数全部来自目标控件本身，
+        /// 所以被门限挡掉的中间调用不会丢状态，最坏只是晚 80ms 生效（3.3）。
+        /// </summary>
+        private void Sync(bool force)
         {
+            if (!force)
+            {
+                int now = Environment.TickCount;
+                if (lastSyncTick != 0 && unchecked(now - lastSyncTick) < SyncMinGapMs) { return; }
+                lastSyncTick = now;
+            }
+
             IntPtr h = target.Handle;
             if (h == IntPtr.Zero) { return; }
 
@@ -283,7 +312,7 @@ namespace Rem.UI
             {
                 if (!dragging && target.CanFocus && !target.Focused) { target.Focus(); }
             }
-            catch (Exception __ex) { Note.Swallow("ThinScroll.cs:OnMouseEnter", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         protected override void OnMouseWheel(MouseEventArgs e)
@@ -302,7 +331,7 @@ namespace Rem.UI
                 {
                     if (poll != null) { poll.Stop(); poll.Dispose(); }
                 }
-                catch (Exception __ex) { Note.Swallow("ThinScroll.cs:Dispose", __ex); }
+                catch (Exception __ex) { Note.Swallow(__ex); }
             }
             base.Dispose(disposing);
         }

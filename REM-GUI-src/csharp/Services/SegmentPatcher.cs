@@ -13,6 +13,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Rem.Core;
 
 namespace Rem.Services
 {
@@ -49,9 +50,10 @@ namespace Rem.Services
         private const string StreamSuffix = "____";
 
         // 补片上限只看「缺失率」：缺片占比不超过该比例就一律补，不设绝对片数硬上限
-        // （1000 片允许补到 300 片）。整段缺失靠邻片顶替会把成片补成同一片反复重复，
+        // （1000 片允许补到 500 片）。整段缺失靠邻片顶替会把成片补成同一片反复重复，
         // 内容严重失真，比老实报错更坑，所以超过这个比例才整组放弃。
-        public const int MaxPatchPercent = 30;
+        // 默认 50%；高级设置「补片上限」（配置键 patchPercent）可按 1–70 调整，经 maxPercent 参数传入。
+        public const int MaxPatchPercent = 50;
 
         /// <summary>
         /// 扫描 tmpDir 下已下载的分片，把缺失索引用相邻分片复制顶替。
@@ -59,7 +61,8 @@ namespace Rem.Services
         /// <param name="tmpDir">引擎的 --tmp-dir 值（形如 &lt;保存目录&gt;\.parts\&lt;名字&gt;）</param>
         /// <param name="apply">false 时只统计不改盘（供测试与预演使用）</param>
         /// <param name="log">可空</param>
-        public static PatchReport Patch(string tmpDir, bool apply, Logger log)
+        /// <param name="maxPercent">缺失率上限（%）：超过就整组放弃；默认 MaxPatchPercent，可由配置调整</param>
+        public static PatchReport Patch(string tmpDir, bool apply, Logger log, int maxPercent = MaxPatchPercent)
         {
             PatchReport report = new PatchReport();
             if (string.IsNullOrEmpty(tmpDir) || !Directory.Exists(tmpDir))
@@ -85,7 +88,7 @@ namespace Rem.Services
 
             for (int i = 0; i < dirs.Count; i++)
             {
-                PatchOneDir(dirs[i], expected, apply, report, log);
+                PatchOneDir(dirs[i], expected, apply, report, log, maxPercent);
             }
 
             StringBuilder sb = new StringBuilder();
@@ -103,7 +106,7 @@ namespace Rem.Services
             if (HasStreamDir(tmpDir)) return tmpDir;
             string[] subs;
             try { subs = Directory.GetDirectories(tmpDir); }
-            catch (Exception) { return ""; }
+            catch (Exception __ex) { Note.Swallow(__ex); return ""; }
             for (int i = 0; i < subs.Length; i++)
             {
                 if (HasStreamDir(subs[i])) return subs[i];
@@ -122,7 +125,7 @@ namespace Rem.Services
                     if (subs[i].EndsWith(StreamSuffix, StringComparison.Ordinal)) return true;
                 }
             }
-            catch (Exception) { }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             return false;
         }
 
@@ -144,7 +147,7 @@ namespace Rem.Services
                     {
                         string[] grand;
                         try { grand = Directory.GetDirectories(subs[i]); }
-                        catch (Exception) { continue; }
+                        catch (Exception __ex) { Note.Swallow(__ex); continue; }
                         for (int k = 0; k < grand.Length; k++)
                         {
                             if (grand[k].EndsWith(StreamSuffix, StringComparison.Ordinal)) list.Add(grand[k]);
@@ -153,7 +156,7 @@ namespace Rem.Services
                 }
                 if (list.Count == 0 && HasIndexedFiles(partsRoot)) list.Add(partsRoot);
             }
-            catch (Exception) { }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             return list;
         }
 
@@ -169,7 +172,7 @@ namespace Rem.Services
                     if (ParseIndex(Path.GetFileName(files[i]), out idx, out ext)) return true;
                 }
             }
-            catch (Exception) { }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             return false;
         }
 
@@ -184,7 +187,7 @@ namespace Rem.Services
                 {
                     string body;
                     try { body = File.ReadAllText(m3u8[i], Encoding.UTF8); }
-                    catch (Exception) { continue; }
+                    catch (Exception __ex) { Note.Swallow(__ex); continue; }
                     int n = 0;
                     string[] lines = body.Replace("\r\n", "\n").Split('\n');
                     for (int k = 0; k < lines.Length; k++)
@@ -194,7 +197,7 @@ namespace Rem.Services
                     if (n > best) best = n;
                 }
             }
-            catch (Exception) { }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             return best;
         }
 
@@ -219,13 +222,13 @@ namespace Rem.Services
             return true;
         }
 
-        private static void PatchOneDir(string dir, int expected, bool apply, PatchReport report, Logger log)
+        private static void PatchOneDir(string dir, int expected, bool apply, PatchReport report, Logger log, int maxPercent)
         {
             Dictionary<string, SortedDictionary<int, string>> byExt =
                 new Dictionary<string, SortedDictionary<int, string>>();
             string[] files;
             try { files = Directory.GetFiles(dir); }
-            catch (Exception) { return; }
+            catch (Exception __ex) { Note.Swallow(__ex); return; }
 
             for (int i = 0; i < files.Length; i++)
             {
@@ -266,14 +269,14 @@ namespace Rem.Services
                 report.Missing += missing.Count;
 
                 // 缺口占比过大才整组放弃：整段缺失靠邻片顶替会把成片补成“同一片无限重复”，得不偿失
-                if (missing.Count * 100 > total * MaxPatchPercent)
+                if (missing.Count * 100 > total * maxPercent)
                 {
                     report.Skipped += missing.Count;
                     if (log != null)
                     {
                         log.Warn(">> 补片：" + Path.GetFileName(dir) + " 的 " + ext + " 缺 " + missing.Count
                                  + "/" + total + "，超过自动补片上限（缺失率 "
-                                 + MaxPatchPercent + "%），放弃补片");
+                                 + maxPercent + "%），放弃补片");
                     }
                     continue;
                 }

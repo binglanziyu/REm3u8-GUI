@@ -160,11 +160,13 @@ namespace Rem.Engine
         // 解密方式只剩 AES-128 一种：下拉选项常量与"加密方式/解密引擎"两个归一函数一并删除，
         // 只有填了 KEY/IV 时才下发 --custom-hls-method AES_128（值来自 AppConfig.HlsMethodAes128）
 
-        /// <summary>KEY / IV 去空白与常见分隔符（冒号、空格）后的原样值，不做大小写改写。</summary>
+        /// <summary>KEY / IV 去空白与常见分隔符（空格、制表符、冒号）后的原样值，不做大小写改写。</summary>
         private static string NormKey(string raw)
         {
             if (raw == null) return "";
-            return raw.Trim().Replace(" ", "").Replace("\t", "");
+            // 冒号：HEX 与 Base64 的字符集都不含冒号，剥掉不会改变取值；用户常把 KID:KEY 这类
+            // 多组写法整段粘进来，本方法注释早就写了要去冒号，实现此前漏了（3.2）
+            return raw.Trim().Replace(" ", "").Replace("\t", "").Replace(":", "");
         }
 
         /// <summary>
@@ -232,7 +234,7 @@ namespace Rem.Engine
                     if (!ExistsWithMediaExt(dir, cand)) return cand;
                 }
             }
-            catch (Exception __ex) { Note.Swallow("ArgBuilder.cs:154", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             return name + "_" + DateTime.Now.ToString("HHmmss");
         }
 
@@ -245,7 +247,7 @@ namespace Rem.Engine
                     if (File.Exists(Path.Combine(dir, name + MediaExt[i]))) return true;
                 }
             }
-            catch (Exception __ex) { Note.Swallow("ArgBuilder.cs:167", __ex); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
             return false;
         }
 
@@ -273,8 +275,9 @@ namespace Rem.Engine
                 }
                 return Safe.FileName(seg);
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return "";
             }
         }

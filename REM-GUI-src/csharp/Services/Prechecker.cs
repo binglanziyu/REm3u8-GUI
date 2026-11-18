@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Rem.Core;
 
 namespace Rem.Services
 {
@@ -55,8 +56,9 @@ namespace Rem.Services
                 if (!Uri.TryCreate(url, UriKind.Absolute, out u)) return false;
                 return u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps;
             }
-            catch (Exception)
+            catch (Exception __ex)
             {
+                Note.Swallow(__ex);
                 return false;
             }
         }
@@ -83,7 +85,9 @@ namespace Rem.Services
 
             int status;
             long ms;
-            string text = Http.GetText(url, cfg, 15000, out status, out ms);
+            // 只读前 256KB：预检只需要判断“是不是 HLS 清单/解析 master”，
+            // 不限量会把直链 mp4 等大文件整包读成 string 直接 OOM（D-HTTP-1）
+            string text = Http.GetText(url, cfg, 15000, 262144, out status, out ms);
 
             if (text == null)
             {
@@ -179,7 +183,7 @@ namespace Rem.Services
             if (string.IsNullOrEmpty(seg)) return;
             string abs;
             try { abs = new Uri(new Uri(baseUrl), seg).ToString(); }
-            catch (Exception) { abs = seg; }
+            catch (Exception __ex) { Note.Swallow(__ex); abs = seg; }
             int st = Http.Head(abs, cfg, cfg == null ? "" : cfg.Headers, 10000);
             if (st == 401 || st == 403 || st == 404)
             {
@@ -208,7 +212,7 @@ namespace Rem.Services
                     VariantInfo v = ParseAttrs(pending);
                     v.Uri = ln;
                     try { v.ResolvedUri = new Uri(new Uri(baseUrl), ln).ToString(); }
-                    catch (Exception) { v.ResolvedUri = ln; }
+                    catch (Exception __ex) { Note.Swallow(__ex); v.ResolvedUri = ln; }
                     list.Add(v);
                     pending = null;
                 }
