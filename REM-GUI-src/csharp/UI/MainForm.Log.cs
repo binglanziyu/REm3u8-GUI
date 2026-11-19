@@ -83,15 +83,42 @@ namespace Rem.UI
 
         /// <summary>
         /// 判断一行日志是否属于引擎的失败信号。退出码在这些场景全是 0，只能靠文本：
-        /// 坏片 = 「分片数量校验不通过 … Failed」；合并/混流失败 = 「Mux failed」「ERROR: Failed」。
+        /// 坏片 = 「分片数量校验不通过 … Failed」；合并/混流失败 = 「Mux failed」「ERROR: Failed」；
+        /// 解密失败 = 源站分片尾部被截断后的一串 CryptographicException（见 LooksLikeDecryptFailure）。
         /// </summary>
         private static bool LooksLikeEngineFailure(string t)
         {
-            if (string.IsNullOrEmpty(t)) return false;
-            if (t.IndexOf("分片数量校验不通过", StringComparison.Ordinal) >= 0) return true;
-            if (t.IndexOf("Mux failed", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (t.IndexOf("ERROR: Failed", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            return false;
+            // 判定逻辑下沉到 Services.FailSignals：UI 里的私有静态方法测不到，
+            // 而这类误判（403 当残片）代价是白跑一轮补片 + 给用户错误结论
+            return FailSignals.LooksLikeEngineFailure(t);
+        }
+
+        /// <summary>
+        /// 鉴权/网络失效：token 过期、Cookie/Header 缺失时引擎重试 10 次后抛 401/403。
+        /// 这是链接问题，不是分片问题，补片救不了，必须走自己的提示分支。
+        /// </summary>
+        private static bool LooksLikeAuthFailure(string t)
+        {
+            return FailSignals.LooksLikeAuthFailure(t);
+        }
+
+        /// <summary>
+        /// 分片数量校验失败 / 合并混流失败（原有三条，口径不动）。
+        /// </summary>
+        private static bool LooksLikePartFailure(string t)
+        {
+            return FailSignals.LooksLikePartFailure(t);
+        }
+
+        /// <summary>
+        /// 解密失败特征：源站把分片尾部写截断后，密文长度不再是 16 的整数倍，
+        /// AES-128-CBC 解密必然抛 CryptographicException（not a complete block / Padding is invalid）。
+        /// 只认这几条专属词：「Unhandled exception」是所有异常的共同前缀，
+        /// 把它当特征会把 403 重试耗尽也算成残片（3.1.1 的误报根因）。
+        /// </summary>
+        private static bool LooksLikeDecryptFailure(string t)
+        {
+            return FailSignals.LooksLikeDecryptFailure(t);
         }
 
         private void HandleLines(List<LineItem> lines)
@@ -106,9 +133,14 @@ namespace Rem.UI
                     continue;
                 }
                 string t = lines[i].Text;
+                // 鉴权/网络失效必须先判：token 过期时引擎同样把 403 包成 Unhandled exception，
+                // 排在补片判定之前才能保证它既不打「残片」文案、也不进补片状态机
+                bool authFail = LooksLikeAuthFailure(t);
+                if (authFail) sawAuthFailed = true;
                 // 引擎对这些失败一律返回 exit=0，只看退出码会误判成功并删掉续传文件；
                 // 这里留标记，交给 CompleteJob 触发自动补片
-                if (LooksLikeEngineFailure(t)) sawJobFailed = true;
+                if (!authFail && LooksLikeEngineFailure(t)) sawJobFailed = true;
+                bool decryptFail = !authFail && LooksLikeDecryptFailure(t);
                 int color = Colors.Default;
                 if (lines[i].IsErr ||
                     t.IndexOf("[ERR", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -121,6 +153,21 @@ namespace Rem.UI
                     color = Colors.Orange;
                 }
                 log.Add(t, color);
+                // 解密失败要单独点明成因：引擎只会吐一串 CryptographicException，
+                // 不说明白的话用户看不出是「源站分片残缺」而不是链接或密钥的问题
+                if (decryptFail && !decryptHintShown)
+                {
+                    decryptHintShown = true;
+                    log.Add(">> 分片解密失败，源站分片残缺：密文长度不是 16 的整数倍，已安排自动补片", Colors.Red);
+                }
+                // 鉴权失效也只提示一次：重试耗尽会把同一句 403 连打 10 行。
+                // 文案与预检口径保持一致，并明确说清不进自动补片——否则用户会盯着
+                // “已安排自动补片”等一个永远不会成功的重试
+                if (authFail && !authHintShown)
+                {
+                    authHintShown = true;
+                    log.Add(">> 链接鉴权失效或已过期（预检口径：链接需要鉴权或已失效，请刷新 Cookie/Header 后重试）：本次不进入自动补片，请重新获取链接后再开始", Colors.Red);
+                }
             }
             if (changed) RefreshProgressUi();
         }

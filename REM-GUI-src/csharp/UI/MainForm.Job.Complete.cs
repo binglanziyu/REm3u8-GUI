@@ -149,6 +149,17 @@ namespace Rem.UI
         {
             if (cfg == null || !cfg.AutoPatch) return false;
             if (patchStage >= 2) return false;
+
+            // 鉴权/网络失效不是残片：补片只是拿同一条过期链接再撞一次 403，
+            // 白等一轮 10 次重试（实测 15 秒）后报同样的错，还容易被误读成源站坏片。
+            // 这里直接终止补片流程，把结论交回用户去换链接。
+            if (sawAuthFailed)
+            {
+                sawAuthFailed = false;
+                log.Warn(">> 自动补片跳过：本次失败是链接鉴权失效或已过期（HTTP 401/403，与预检同口径：请刷新 Cookie/Header 后重试），补片救不了链接本身的问题，请重新获取链接后再开始");
+                return false;
+            }
+
             if (string.IsNullOrEmpty(lastTmp) || !Directory.Exists(lastTmp))
             {
                 log.Warn(">> 自动补片：本次没有可用的分片目录，跳过");

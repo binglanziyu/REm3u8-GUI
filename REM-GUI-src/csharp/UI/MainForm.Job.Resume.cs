@@ -39,6 +39,12 @@ namespace Rem.UI
         {
             try
             {
+                // 上一次拖入的 resume 还在探活：直接忽略，避免两个探测各自 BeginRun
+                if (resumeProbing)
+                {
+                    SetStatus("正在校验续传链接，请稍候", Theme.Orange);
+                    return;
+                }
                 JVal j = JVal.Parse(File.ReadAllText(path, Encoding.UTF8));
                 string url = j.GetStr("url", "");
                 string dir = j.GetStr("saveDir", "");
@@ -84,11 +90,68 @@ namespace Rem.UI
                 }
                 string ff = AppPaths.FindTool(AppPaths.FFmpegName);
                 Directory.CreateDirectory(txtDir.Text.Trim());
-                BeginRun(null, url, dir, exe, ff, tmp);
+                // 不再直接 BeginRun：resume 里存的是上次抓到的地址，token 可能早已过期，
+                // 闷头续传要白跑 10 次重试（实测 15 秒）才报错。先 HEAD 探一次再决定
+                ProbeResumeUrlThenRun(url, dir, exe, ff, tmp);
             }
             catch (Exception ex)
             {
                 log.Err("读取续传文件失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 续传前的链接探活：HEAD 一次原地址，403/401 就地中止续传。
+        /// 必须放在后台线程——网络请求在 UI 线程会卡住窗口（最长 8 秒）。
+        /// </summary>
+        private void ProbeResumeUrlThenRun(string url, string dir, string exe, string ff, string tmp)
+        {
+            resumeProbing = true;
+            SetStatus("正在校验续传链接…", Theme.Dim);
+            log.Dim(">> 续传前先校验链接是否仍然有效（HEAD 一次，不下载内容）");
+            AppConfig cfgSnap = cfg;
+            string headers = cfgSnap == null ? "" : cfgSnap.Headers;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                int st = 0;
+                try { st = Http.Head(url, cfgSnap, headers, 8000); }
+                catch (Exception __ex) { Note.Swallow(__ex); st = 0; }
+                try
+                {
+                    BeginInvoke(new Action(delegate { OnResumeProbeDone(url, dir, exe, ff, tmp, st); }));
+                }
+                catch (Exception __ex2) { Note.Swallow(__ex2); }
+            });
+        }
+
+        /// <summary>探活结果回到 UI 线程再落地：只有这里会真正发起续传或中止。</summary>
+        private void OnResumeProbeDone(string url, string dir, string exe, string ff, string tmp, int status)
+        {
+            resumeProbing = false;
+            if (IsDisposed) return;
+            if (status == 401 || status == 403)
+            {
+                // 与预检同一口径：链接需要鉴权或已失效。签名过期的地址重试多少次都是 403，
+                // 所以既不进补片、也不重试，直接把结论给用户
+                log.Err(">> 续传中止：续传链接已过期（HTTP " + status + "），请重新获取链接");
+                log.Dim(">> 与预检口径一致：链接需要鉴权或已失效，请刷新 Cookie/Header 后重试；旧链接签名过期后无法靠重试恢复");
+                SetStatus("续传链接已过期，请重新获取链接", Theme.Red);
+                return;
+            }
+            if (state != RunState.Idle)
+            {
+                SetStatus("请先暂停当前任务", Theme.Orange);
+                return;
+            }
+            if (status > 0) log.Dim(">> 续传链接可访问（HTTP " + status + "），继续续传");
+            else log.Dim(">> 续传链接未能探活（网络异常或无响应），仍按原链接尝试续传");
+            try
+            {
+                BeginRun(null, url, dir, exe, ff, tmp);
+            }
+            catch (Exception ex)
+            {
+                log.Err("续传启动失败：" + ex.Message);
             }
         }
 
