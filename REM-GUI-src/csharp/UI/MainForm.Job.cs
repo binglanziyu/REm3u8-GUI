@@ -25,6 +25,15 @@ namespace Rem.UI
         // 引擎的失败信号：坏片「分片数量校验不通过」、合并/混流失败「Mux failed / ERROR: Failed」，
         // 这几种情况的退出码全是 0，只认退出码会把失败当成完成并清掉续传与分片
         private bool sawJobFailed;
+        // 解密失败提示只打一次：引擎会对每个残片抛一条 CryptographicException，逐条提示会刷屏
+        private bool decryptHintShown;
+        // 鉴权/网络失效（token 过期、401/403）：与残片分开记，补片阶段据此直接跳过，
+        // 否则会拿一条早已过期的链接再跑一轮重试，白等十几秒还报同样的错
+        private bool sawAuthFailed;
+        // 鉴权失效提示也只打一次：重试耗尽的 10 行日志全是同一句 403
+        private bool authHintShown;
+        // 续传前的链接探活正在进行：防止用户连拖两个 resume 文件撞出两次探测
+        private bool resumeProbing;
         private string lastUrl = "";
         private string lastDir = "";
         private string lastExe = "";

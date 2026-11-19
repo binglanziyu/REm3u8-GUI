@@ -4,7 +4,7 @@
 
 **把 N_m3u8DL-RE 的参数表，变成一张能看懂的表单。**
 
-![Version](https://img.shields.io/badge/version-3.1.1-2ea043?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.1.2-2ea043?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square)
 ![Runtime](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)
@@ -135,7 +135,7 @@ powershell -ExecutionPolicy Bypass -File .\REM-GUI-src\tools\smoke_test.ps1
 powershell -ExecutionPolicy Bypass -File .\REM-GUI-src\tools\e2e_test.ps1
 ```
 
-> 只想用成品不必构建，直接取 [REM-GUI.exe v3.1.1](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.1/REM-GUI.exe)；需要改代码或自行验证构建链路时，再按上面的步骤来。
+> 只想用成品不必构建，直接取 [REM-GUI.exe v3.1.2](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.2/REM-GUI.exe)；需要改代码或自行验证构建链路时，再按上面的步骤来。
 
 ## 目录结构
 

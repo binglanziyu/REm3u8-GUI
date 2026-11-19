@@ -29,6 +29,9 @@ namespace Rem.UI
             // 用户新开任务：清空上一轮自动补片状态，避免接续标记串到新任务
             patchStage = 0;
             sawJobFailed = false;
+            decryptHintShown = false;
+            sawAuthFailed = false;
+            authHintShown = false;
             lastTmp = "";
 
             string url = Safe.UrlFirst(txtUrl.Text);

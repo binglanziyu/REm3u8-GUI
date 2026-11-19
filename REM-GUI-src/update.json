@@ -1,6 +1,6 @@
 ﻿{
-    "version":  "3.1.1",
-    "notes":  "修复高级设置多行输入框的白色原生滚动条，长 URL 与长参数改为自动折行",
+    "version":  "3.1.2",
+    "notes":  "修复解密失败误判、403 鉴权失效前置识别、续传前 token 时效探活，避免白跑自动补片",
     "engine":  {
                    "repo":  "nilaoda/N_m3u8DL-RE",
                    "assetHint":  "win-x64",

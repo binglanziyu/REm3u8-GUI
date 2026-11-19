@@ -197,6 +197,71 @@ namespace Rem.Tests
                 PatchReport custom2 = SegmentPatcher.Patch(custom2Dir, true, null, 40);
                 Eq(30, custom2.Patched, "补片上限可调: 30% 缺口在 40% 上限内全补");
                 Eq(0, custom2.Skipped, "补片上限可调: 未触发放弃");
+
+                // 加密流：源站尾部写截断的分片「残缺但存在」，文件名合法，只看文件名永远算 Present。
+                // 这类分片长度对不上 16，解密必抛 CryptographicException，必须识别成坏片并补掉
+                string aesDir = Path.Combine(root, "aes");
+                string aesStream = Path.Combine(aesDir, "0____");
+                Directory.CreateDirectory(aesStream);
+                StringBuilder aesM3u = new StringBuilder("#EXTM3U" + "\n");
+                for (int i = 0; i < 10; i++)
+                {
+                    aesM3u.Append("#EXTINF:4,").Append("\n").Append(i).Append(".ts\n");
+                }
+                File.WriteAllText(Path.Combine(aesDir, "raw.m3u8"), aesM3u.ToString());
+                // 10 片都在盘上：9 片是 16 对齐的完好密文，第 4 片被截断成 150 字节
+                for (int i = 0; i < 10; i++)
+                {
+                    File.WriteAllBytes(Path.Combine(aesStream, i + ".ts"), new byte[i == 4 ? 150 : 160]);
+                }
+
+                PatchReport aesDry = SegmentPatcher.Patch(aesDir, false, null);
+                Eq(1, aesDry.Missing, "加密流: 长度不齐 16 的残片被算作坏片");
+                Eq(9, aesDry.Present, "加密流: 其余 16 对齐的分片仍算完好");
+                Ok(!File.Exists(Path.Combine(aesStream, "4.ts.bad")), "加密流: 预演不改盘");
+
+                PatchReport aesReal = SegmentPatcher.Patch(aesDir, true, null);
+                Eq(1, aesReal.Patched, "加密流: 坏片被相邻分片顶替");
+                Ok(File.Exists(Path.Combine(aesStream, "4.ts.bad")), "加密流: 坏片先改名 .bad 留证");
+                Ok(new FileInfo(Path.Combine(aesStream, "4.ts")).Length == 160, "加密流: 顶替后长度对齐 16");
+                int aesTsCount = 0;
+                string[] aesFiles = Directory.GetFiles(aesStream);
+                for (int i = 0; i < aesFiles.Length; i++)
+                {
+                    if (aesFiles[i].EndsWith(".ts", StringComparison.OrdinalIgnoreCase)) aesTsCount++;
+                }
+                Eq(10, aesTsCount, "加密流: 补齐后仍是 10 个分片，未误增");
+
+                // 非加密流：正常分片长度本来就五花八门，一律不许按长度判坏
+                string plainDir = Path.Combine(root, "plain");
+                string plainStream = Path.Combine(plainDir, "0____");
+                Directory.CreateDirectory(plainStream);
+                File.WriteAllText(Path.Combine(plainDir, "raw.m3u8"), aesM3u.ToString());
+                int[] plainSizes = new int[] { 300, 305, 311, 320, 333, 350, 366, 371, 388, 401 };
+                for (int i = 0; i < plainSizes.Length; i++)
+                {
+                    File.WriteAllBytes(Path.Combine(plainStream, i + ".ts"), new byte[plainSizes[i]]);
+                }
+
+                PatchReport plainDry = SegmentPatcher.Patch(plainDir, false, null);
+                Eq(0, plainDry.Missing, "非加密流: 长度不齐 16 的正常分片不被判坏");
+                Eq(10, plainDry.Present, "非加密流: 10 片全部算完好");
+                PatchReport plainReal = SegmentPatcher.Patch(plainDir, true, null);
+                Eq(0, plainReal.Patched, "非加密流: 一律不补片");
+
+                // 判据本身单独验：样本与对齐率任一不达标都不认成加密流
+                SortedDictionary<int, string> aesMap = new SortedDictionary<int, string>();
+                SortedDictionary<int, string> plainMap = new SortedDictionary<int, string>();
+                for (int i = 0; i < 8; i++)
+                {
+                    aesMap[i] = Path.Combine(aesStream, i + ".ts");
+                    plainMap[i] = Path.Combine(plainStream, i + ".ts");
+                }
+                Ok(SegmentPatcher.LooksAesEncrypted(aesMap), "加密判据: 8 片全对齐 16 → 认定为加密流");
+                Ok(!SegmentPatcher.LooksAesEncrypted(plainMap), "加密判据: 对齐率不足 → 不认定为加密流");
+                Ok(!SegmentPatcher.LooksAesEncrypted(null), "加密判据: 空表不算加密流");
+                Ok(SegmentPatcher.IsBrokenAesPart(Path.Combine(aesStream, "4.ts.bad")), "加密判据: 150 字节残片算坏片");
+                Ok(!SegmentPatcher.IsBrokenAesPart(Path.Combine(aesStream, "0.ts")), "加密判据: 160 字节完好片不算坏片");
             }
             finally
             {
@@ -741,6 +806,39 @@ namespace Rem.Tests
             BuiltArgs b6 = ArgBuilder.Build(d6, "https://a.com/v.m3u8", "C:\\tmp", "v",
                                             "eng.exe", "", "", null, null);
             Eq("<none>", ArgVal(b6.Args, "--custom-hls-method"), "解密：只填分隔符的 KEY 归一为空，不下发任何解密参数");
+
+            // ---- 失败信号判定（回归 3.1.1 误报：403 被当成源站残片）----
+            // 引擎重试耗尽时的真实形态：外层 Unhandled exception，内层 HttpRequestException + 403。
+            // 旧实现只要见到 "Unhandled exception" 就判残片，于是 token 过期也会打
+            // “分片解密失败，源站分片残缺，已安排自动补片”并白跑一轮补片。
+            string auth403 = "Unhandled exception: System.Exception: Failed to execute action after 10 retries. "
+                           + "---> System.Net.Http.HttpRequestException: Response status code does not indicate success: 403 (Forbidden). (10/10)";
+            Ok(FailSignals.LooksLikeAuthFailure(auth403), "403 重试耗尽 → 识别为鉴权失效");
+            Ok(!FailSignals.LooksLikeDecryptFailure(auth403), "403 重试耗尽 → 不得判为分片解密失败");
+            Ok(!FailSignals.LooksLikeEngineFailure(auth403), "403 重试耗尽 → 不得触发补片标记");
+            Ok(FailSignals.LooksLikeAuthFailure("RetryUtil: 401 (Unauthorized) 1/10"), "RetryUtil + 401 → 识别为鉴权失效");
+            Ok(!FailSignals.LooksLikeEngineFailure("RetryUtil: 401 (Unauthorized) 1/10"), "RetryUtil + 401 → 不触发补片");
+            Ok(!FailSignals.LooksLikeAuthFailure("System.Security.Cryptography.CryptographicException: Padding is invalid"), "解密异常不得被认成鉴权失效");
+
+            // 单独一句 Unhandled exception（不含专属解密词）不再算残片
+            Ok(!FailSignals.LooksLikeDecryptFailure("Unhandled exception: System.Exception: Failed to execute action after 10 retries."),
+               "只有 Unhandled exception 的行 → 不判解密失败");
+            Ok(!FailSignals.LooksLikeEngineFailure("Unhandled exception: System.Exception: 未知错误"), "只有 Unhandled exception 的行 → 不触发补片");
+
+            // 真正的残片仍要命中，否则修复就变成了“什么都不报”
+            string decryptSig = "Unhandled exception: System.Security.Cryptography.CryptographicException: The input data is not a complete block.";
+            Ok(FailSignals.LooksLikeDecryptFailure(decryptSig), "CryptographicException: not a complete block → 判解密失败");
+            Ok(FailSignals.LooksLikeEngineFailure(decryptSig), "真正的解密失败 → 仍触发补片");
+            Ok(FailSignals.LooksLikeDecryptFailure("System.Security.Cryptography.CryptographicException: Padding is invalid and cannot be removed."),
+               "Padding is invalid → 判解密失败");
+            Ok(!FailSignals.LooksLikeDecryptFailure(""), "空行 → 不判解密失败");
+            Ok(!FailSignals.LooksLikeDecryptFailure(null), "null → 不判解密失败");
+
+            // 原有三条坏片/合并口径保持不变
+            Ok(FailSignals.LooksLikePartFailure("分片数量校验不通过：缺少 3 个 → Failed"), "分片数量校验不通过 → 判坏片");
+            Ok(FailSignals.LooksLikeEngineFailure("Mux failed: 混流失败"), "Mux failed → 判引擎失败");
+            Ok(FailSignals.LooksLikeEngineFailure("ERROR: Failed to write output"), "ERROR: Failed → 判引擎失败");
+            Ok(!FailSignals.LooksLikeEngineFailure("下载速度 1.2 MB/s"), "普通日志行 → 不误报失败");
         }
     }
 }
