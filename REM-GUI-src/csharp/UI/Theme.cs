@@ -299,17 +299,18 @@ namespace Rem.UI
 
             TextBox t = new TextBox();
             t.Multiline = true;
-            t.WordWrap = false;
-            // 超长行要能横向看：开原生横向条（竖条仍由 ThinScroll 自绘并隐藏原生竖条）
-            t.ScrollBars = ScrollBars.Horizontal;
+            // 不开任何原生滚动条：系统绘制的横向条在深绿底上是一条亮白条（带左右三角箭头），
+            // DarkMode 染色对 TextBox 内部滚动条并不总是生效，实测仍裸露白条，与主题冲突。
+            // 改为自动折行：长 URL / 长参数折到下一行，不会因为没横向条而被裁掉；
+            // 纵向滚动仍由 ThinScroll 自绘承担（原生竖条由 Native.HideScrollBar 藏掉）。
+            t.WordWrap = true;
+            t.ScrollBars = ScrollBars.None;
             t.BorderStyle = BorderStyle.None;
             t.BackColor = Field;
             t.ForeColor = Text;
             t.Font = mono ? Mono(fontSize) : Ui(fontSize);
             t.Location = new Point(S(padLeft), S(padV));
             t.Size = new Size(S(w) - S(padLeft) - S(padRight), S(h) - S(padV) * 2);
-            // 原生横向条套 DarkMode 主题，避免浅色条在深绿底上跳色
-            Rem.Interop.Native.ApplyDarkScrollBar(t.Handle);
 
             FieldFrame frame = new FieldFrame(t);
             frame.Location = new Point(S(x), S(y));
