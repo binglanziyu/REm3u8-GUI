@@ -277,6 +277,36 @@ namespace Rem.UI
             Controls.Add(lbLogHint);
             y += note;
 
+            // ---------- 赞助提醒频率（二选一，占按钮行左侧空档，不额外长高）----------
+            Label lbSp = new Label();
+            lbSp.Text = "赞助提醒";
+            lbSp.AutoSize = false;
+            lbSp.TextAlign = ContentAlignment.MiddleLeft;
+            lbSp.Location = new Point(S(x), S(y + 9));
+            lbSp.Size = new Size(S(62), S(22));
+            lbSp.ForeColor = Theme.Text;
+            Controls.Add(lbSp);
+
+            // 两个开关互斥：勾一个自动放开另一个；不允许两个都关掉（否则周期无从判断）
+            chkFreqWeek = NewToggle(this, "每周一次", x + 62, y + 8);
+            chkFreqWeek.Size = new Size(S(96), S(26));
+            chkFreqDay = NewToggle(this, "每日一次", x + 158, y + 8);
+            chkFreqDay.Size = new Size(S(96), S(26));
+            // 先定初值再挂互斥：反过来会让初始化时的「取消勾选」被自己拉回去
+            bool week = Sponsor.NormalizeFreq(SponsorFreq) == Sponsor.FreqWeek;
+            chkFreqWeek.Checked = week;
+            chkFreqDay.Checked = !week;
+            chkFreqWeek.CheckedChanged += delegate (object s, EventArgs e)
+            {
+                if (chkFreqWeek.Checked) chkFreqDay.Checked = false;
+                else if (!chkFreqDay.Checked) chkFreqWeek.Checked = true;
+            };
+            chkFreqDay.CheckedChanged += delegate (object s, EventArgs e)
+            {
+                if (chkFreqDay.Checked) chkFreqWeek.Checked = false;
+                else if (!chkFreqWeek.Checked) chkFreqDay.Checked = true;
+            };
+
             Button ok = new Button();
             ok.Text = "确定";
             ok.Location = new Point(S(288), S(y + 8));

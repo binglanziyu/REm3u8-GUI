@@ -148,15 +148,17 @@ namespace Rem.UI
             lnkClean.LinkClicked += delegate (object s, LinkLabelLinkClickedEventArgs e) { OnCleanLogs(); };
             Controls.Add(lnkClean);
 
-            // 「诊断日志」入口（重构方案第 4 章 E3）：填在「清理日志」右侧的空白里，
-            // AutoSize 自适应，不移动任何已有控件，也不改窗口尺寸
-            lnkDiag = new LinkLabel();
-            lnkDiag.Text = "诊断日志";
-            lnkDiag.AutoSize = true;
-            lnkDiag.Location = new Point(S(444), S(250));
-            Theme.StyleLink(lnkDiag);
-            lnkDiag.LinkClicked += delegate (object s, LinkLabelLinkClickedEventArgs e) { OnOpenDiag(); };
-            Controls.Add(lnkDiag);
+            // 「赞助一下~」入口：占据原「诊断日志」的位置与尺寸，AutoSize 自适应，
+            // 不移动任何已有控件，也不改窗口尺寸
+            lnkSponsor = new LinkLabel();
+            lnkSponsor.Text = "赞助一下~";
+            lnkSponsor.AutoSize = true;
+            lnkSponsor.Location = new Point(S(444), S(250));
+            Theme.StyleLink(lnkSponsor);
+            lnkSponsor.LinkColor = Theme.Orange;
+            lnkSponsor.VisitedLinkColor = Theme.Orange;
+            lnkSponsor.LinkClicked += delegate (object s, LinkLabelLinkClickedEventArgs e) { OnSponsor(); };
+            Controls.Add(lnkSponsor);
 
             // ---- 进度 ----
             lblProg = new Label();
@@ -195,7 +197,10 @@ namespace Rem.UI
             txtLog.BorderStyle = BorderStyle.None;
             txtLog.Font = Theme.Mono(9.5F);
             txtLog.WordWrap = true;
-            txtLog.ScrollBars = RichTextBoxScrollBars.Vertical;
+            // 3.4：日志区只留一条自绘绿色细条。RichTextBox 的原生竖条藏不干净——ShowScrollBar 藏掉后
+            // RichEdit 每次重排版都会把它建回来，白色竖条就贴在 ThinScroll 左侧并排重复。
+            // 这里干脆不申请原生条（无 WS_VSCROLL），右侧改由 EM_SETRECT 让位，滚动全部交给 ThinScroll。
+            txtLog.ScrollBars = RichTextBoxScrollBars.None;
             txtLog.ReadOnly = true;
             txtLog.DetectUrls = false;
             txtLog.AccessibleName = "txtLog";   // 供 UIA / 自动化脚本稳定定位
@@ -204,6 +209,15 @@ namespace Rem.UI
             txtLog.ShortcutsEnabled = true;
             txtLog.TabStop = false;
             txtLog.VScroll += delegate (object s, EventArgs e) { };
+            txtLog.HandleCreated += delegate (object s, EventArgs e) { ApplyLogTextInset(); };
+            txtLog.SizeChanged += delegate (object s, EventArgs e) { ApplyLogTextInset(); };
+            // 撤掉原生条后 RichEdit 自己不再处理滚轮（实测 WM_MOUSEWHEEL 无法移动视图），
+            // 滚轮改走与 ThinScroll 同一条 EM_LINESCROLL 通道，每次 3 行，与拖动同一套定位方式。
+            txtLog.MouseWheel += delegate (object s, MouseEventArgs e)
+            {
+                Native.ScrollBy(txtLog.Handle, e.Delta > 0 ? -3 : 3);
+                if (scLog != null) { scLog.SyncNow(); }
+            };
             Controls.Add(txtLog);
             scLog = new ThinScroll(txtLog, this);
 
@@ -243,6 +257,17 @@ namespace Rem.UI
             banner.Controls.Add(lbBannerDetail);
 
             Controls.Add(banner);
+        }
+
+        /// <summary>
+        /// 日志控件不申请原生竖条后，文本会一直铺到控件右缘；这里用格式化矩形给自绘 ThinScroll
+        /// 留出「条宽 + 2px 余量」，否则每行行尾会被压在细条底下。首次建句柄与尺寸变化各调一次。
+        /// </summary>
+        private void ApplyLogTextInset()
+        {
+            if (txtLog == null || !txtLog.IsHandleCreated) { return; }
+            int inset = S(ThinScroll.BarWidth) + S(2);
+            Native.SetTextRightInset(txtLog.Handle, txtLog.ClientSize.Width, txtLog.ClientSize.Height, inset);
         }
 
         /// <summary>命令行预览与底部按钮（清屏 / 暂停 / 开始下载）。</summary>
@@ -361,7 +386,7 @@ namespace Rem.UI
             tip.SetToolTip(btnAdv, "开关类选项、代理、请求头与额外参数");
             tip.SetToolTip(txtCmd, "实际下发给 N_m3u8DL-RE 的完整命令行（只读；KEY/IV 显示为 * 打码，其余与实际下发一致）");
             tip.SetToolTip(lnkClean, "删除历史日志文件，当前会话日志保留");
-            tip.SetToolTip(lnkDiag, "查看本次会话的内部异常记录（diag.log）");
+            tip.SetToolTip(lnkSponsor, "开源不易，请作者喝杯咖啡（微信 / 支付宝收款码）");
             tip.SetToolTip(lnkUpdate, "检查 N_m3u8DL-RE 是否有新版本");
             tip.SetToolTip(txtLog, "实时运行日志，错误为红色、警告为橙色");
             tip.SetToolTip(txtUrl, "视频页 / 播放列表页链接；双击输入框可直接粘贴剪贴板");

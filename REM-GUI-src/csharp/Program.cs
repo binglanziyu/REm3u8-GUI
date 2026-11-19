@@ -16,7 +16,7 @@ using Rem.Core;
 public static class Program
 {
     /// <summary>应用版本：配置文件、窗口标题、日志首行统一取这里。</summary>
-    public const string Version = "3.1.2";
+    public const string Version = "3.1.3";
 
     /// <summary>单实例互斥体名（Local\ 作用域，多用户会话互不干扰）。</summary>
     private const string MutexName = "Local\\REM-GUI-Single-7F1C4A2E";
@@ -231,7 +231,7 @@ public static class Program
             if (nl > 0) firstLine = firstLine.Substring(0, nl);
             if (firstLine.Length > 300) firstLine = firstLine.Substring(0, 300) + " …";
             MessageBox.Show(
-                "程序内部出现异常，已记录到诊断日志，可以继续使用。\r\n\r\n"
+                "程序内部出现异常，已记录到本地日志文件，可以继续使用。\r\n\r\n"
                 + firstLine + "\r\n\r\n日志：" + AppPaths.DiagFile,
                 "REM-GUI", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }

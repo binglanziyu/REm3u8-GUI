@@ -236,10 +236,32 @@ namespace Rem.UI
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                 {
                     cfg.EngineExt = dlg.FileName;
-                    string v = EngineManager.Probe(dlg.FileName);
-                    lblUpd.Text = "外部引擎 " + (v.Length > 0 ? v : "?");
+                    // P1-3：版本探测放后台，UI 线程只负责立刻反馈「检测中」
+                    lblUpd.Text = "外部引擎 检测中…";
+                    lblUpd.ForeColor = Theme.Dim;
                     UpdateEngineButton();
                     log.Info(">> 使用外部引擎：" + dlg.FileName);
+                    string pick = dlg.FileName;
+                    EngineManager.ProbeAsync(pick, delegate (string v)
+                    {
+                        try
+                        {
+                            BeginInvoke(new Action(delegate
+                            {
+                                if (IsDisposed) return;
+                                lblUpd.Text = "外部引擎 " + (v.Length > 0 ? v : "?");
+                                lblUpd.ForeColor = Theme.Dim;
+                                UpdateEngineButton();
+                                if (v.Length == 0)
+                                {
+                                    log.Warn(">> 外部引擎版本识别失败（无响应或输出无法解析）：" + pick);
+                                    SetStatus("外部引擎已选用，但版本识别失败", Theme.Orange);
+                                }
+                                else log.Dim(">> 外部引擎版本 " + v);
+                            }));
+                        }
+                        catch (Exception __ex) { Note.Swallow(__ex); }
+                    });
                 }
             }
         }
@@ -271,34 +293,59 @@ namespace Rem.UI
 
             UpdateManifest m = manifest;
             AppConfig snapshot = cfg;
+            // P1-3：这里只读缓存过的版本，绝不在 UI 线程起进程探测
             string installed = InstalledEngineVersion();
 
-            ThreadPool.QueueUserWorkItem(delegate (object st)
+            // 其余检查逻辑原样；抽成委托是因为「版本未知」时要先补探一轮再发检查请求
+            Action startCheck = delegate
             {
-                UpdateResult r;
-                try
+                ThreadPool.QueueUserWorkItem(delegate (object st)
                 {
-                    r = UpdateChecker.Check(m, installed, Program.Version, snapshot, log);
-                }
-                catch (Exception ex)
+                    UpdateResult r;
+                    try
+                    {
+                        r = UpdateChecker.Check(m, installed, Program.Version, snapshot, log);
+                    }
+                    catch (Exception ex)
+                    {
+                        Note.Swallow(ex);
+                        r = new UpdateResult();
+                        r.Message = "检查失败：" + ex.Message;
+                    }
+                    updResult = r;
+                    updDone = true;
+                    updBusy = false;
+                });
+            };
+
+            // 本地版本还没记录时，后台补探一次再查（探测最多 5 秒，压在 UI 线程就是假死）
+            string probeExe = installed == "0.0.0" ? ResolveEngineExe() : "";
+            if (probeExe.Length > 0)
+            {
+                EngineManager.ProbeAsync(probeExe, delegate (string v)
                 {
-                    Note.Swallow(ex);
-                    r = new UpdateResult();
-                    r.Message = "检查失败：" + ex.Message;
-                }
-                updResult = r;
-                updDone = true;
-                updBusy = false;
-            });
+                    if (v.Length > 0) installed = v;
+                    startCheck();
+                });
+            }
+            else
+            {
+                startCheck();
+            }
         }
 
+        /// <summary>
+        /// 已安装引擎的版本号：优先用引擎清单/内存缓存里的值。
+        /// P1-3 之后此方法绝不会阻塞——缓存缺失时返回 "0.0.0"，由调用方在后台补探
+        /// （ResolveEngineExe + EngineManager.ProbeAsync），结果回投 UI 后再补一次检查。
+        /// </summary>
         private string InstalledEngineVersion()
         {
             EngineEntry en = CurrentEngine();
             if (en != null && !string.IsNullOrEmpty(en.Version)) return en.Version;
             string exe = ResolveEngineExe();
             if (exe.Length == 0) return "0.0.0";
-            string v = EngineManager.Probe(exe);
+            string v = EngineManager.Cached(exe);
             return v.Length > 0 ? v : "0.0.0";
         }
 

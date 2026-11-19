@@ -71,13 +71,13 @@ namespace Rem.UI
 
         private void SetStatus(string text)
         {
-            lblStatus.Text = text;
+            lblStatus.Text = Enc.Repair(text);
             lblStatus.ForeColor = Theme.Dim;
         }
 
         private void SetStatus(string text, Color color)
         {
-            lblStatus.Text = text;
+            lblStatus.Text = Enc.Repair(text);
             lblStatus.ForeColor = color;
         }
 
@@ -208,7 +208,10 @@ namespace Rem.UI
                     txtLog.SelectionColor = logBacklog[i].Argb == Colors.Default
                         ? Color.FromArgb(214, 216, 220)
                         : Color.FromArgb(logBacklog[i].Argb);
-                    txtLog.AppendText(logBacklog[i].Text + "\n");
+                    // 统一在「上屏前」再修一次 mojibake：日志缓冲区的来源不止引擎管道
+                    // （手工 Info、异常文本、resume 名称、成品名都会进这里），
+                    // Enc.Repair 对正常文本是恒等变换，重复调用无副作用
+                    txtLog.AppendText(Enc.Repair(logBacklog[i].Text) + "\n");
                     logLines++;
                 }
                 logBacklog.RemoveRange(0, take);
@@ -224,40 +227,49 @@ namespace Rem.UI
             UpdateLogUse();
         }
 
-        /// <summary>打开诊断日志（重构方案第 4 章 E3）：让"程序吞了个异常"变成用户够得着的一份文件。</summary>
-        private void OnOpenDiag()
+        /// <summary>
+        /// 打开「赞助一下~」窗口（内置微信 / 支付宝收款码）。
+        /// 原「诊断日志」入口已移除：diag.log 仍在内部落盘，但不再向用户暴露任何查看入口。
+        /// </summary>
+        private void OnSponsor()
         {
-            string path = AppPaths.DiagFile;
-            if (string.IsNullOrEmpty(path) || !File.Exists(path))
-            {
-                SetStatus("本次会话没有内部异常记录");
-                return;
-            }
             try
             {
-                System.Diagnostics.Process.Start(path);
-                SetStatus("已打开诊断日志：" + path);
+                using (SponsorForm f = new SponsorForm())
+                {
+                    f.ShowDialog(this);
+                }
+                // 用户主动点开即视为已看过本周期提醒，避免下次启动又弹一次
+                Sponsor.Touch(cfg);
+                ConfigStore.Save(AppPaths.ConfigPath, cfg, log);
+                SetStatus("感谢支持~", Theme.Orange);
             }
             catch (Exception ex)
             {
-                // 没有 .log 关联程序时退化为打开所在目录，保证入口始终有效
                 Note.Swallow(ex);
-                try
-                {
-                    using (System.Diagnostics.Process p = System.Diagnostics.Process.Start("explorer.exe", AppPaths.LogDir)) { }
-                }
-                catch (Exception ex2) { Note.Swallow(ex2); }
-                SetStatus("已打开日志目录：" + AppPaths.LogDir);
+                SetStatus("赞助窗口打开失败", Theme.Red);
             }
         }
 
-        /// <summary>诊断入口的条数提示（不占布局，挂在悬浮提示上）</summary>
-        private void UpdateDiagUse()
+        /// <summary>
+        /// 启动时的赞助提醒：按设置里的频率（每日一次 / 每周一次）判断是否到期。
+        /// 时序上先落时间戳再弹窗——用户直接点 X 关掉也算本周期已提醒，不会每次启动都骚扰。
+        /// </summary>
+        private void MaybeShowSponsor()
         {
-            if (tip == null || lnkDiag == null || lnkDiag.IsDisposed) return;
-            int n = Logger.DiagCount;
-            if (n <= 0) tip.SetToolTip(lnkDiag, "本次会话没有内部异常记录\r\n点击查看诊断日志（diag.log）");
-            else tip.SetToolTip(lnkDiag, "本次会话已记录 " + n + " 条内部异常（已写入 diag.log）\r\n点击查看诊断日志");
+            try
+            {
+                if (cfg == null) return;
+                if (!Sponsor.DueNow(cfg)) return;
+                Sponsor.Touch(cfg);
+                ConfigStore.Save(AppPaths.ConfigPath, cfg, log);
+                using (SponsorForm f = new SponsorForm())
+                {
+                    f.ShowDialog(this);
+                }
+                log.Dim("已弹出赞助提醒（频率：" + Sponsor.FreqLabel(cfg.SponsorFreq) + "）");
+            }
+            catch (Exception __ex) { Note.Swallow(__ex); }
         }
 
         /// <summary>日志用量提示（旧版 lblLogUse 的回退项，这里挂在“清理日志”的悬浮提示上，不占布局）。</summary>
@@ -266,7 +278,6 @@ namespace Rem.UI
             if (tip == null || lnkClean == null || lnkClean.IsDisposed) return;
             int max = cfg != null && cfg.LogLimit > 0 ? cfg.LogLimit : 200000;
             tip.SetToolTip(lnkClean, "当前显示 " + logLines + " 行 / 上限 " + max + " 字符（超出裁剪最早部分）\r\n点击删除历史日志文件，当前会话保留");
-            UpdateDiagUse();
         }
 
         private void TrimLog()

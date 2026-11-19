@@ -8,7 +8,9 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using Rem.Core;
+using Rem.Interop;
 
 namespace Rem.Services
 {
@@ -87,13 +89,19 @@ namespace Rem.Services
             return list;
         }
 
-        /// <summary>同步探测版本（只用于后台线程，最多阻塞 5 秒）。</summary>
+        /// <summary>
+        /// 探测引擎版本。命中缓存立即返回；未命中才起进程，最多阻塞 5 秒（超时按空串返回）。
+        /// P1-3：原来用 StandardOutput.ReadLine() 同步读一行，引擎若不输出不换行就永久阻塞，
+        /// 而该调用点曾被 UI 线程同步调用（选择外部引擎、更新检查取本地版本），表现为界面直接假死。
+        /// 现在改为「异步事件收集 + WaitForExit 限时 + 超时整树强杀」，任何情况都不会无限等。
+        /// </summary>
         public static string Probe(string exePath)
         {
             if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return "";
             string cached = Cached(exePath);
             if (!string.IsNullOrEmpty(cached)) return cached;
             string found = "";
+            Process p = null;
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
@@ -103,32 +111,77 @@ namespace Rem.Services
                 psi.CreateNoWindow = true;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
-                using (Process p = new Process())
+
+                StringBuilder sb = new StringBuilder();
+                object gate = new object();
+                // 异步读取：回调线程写、主线程读，全部走同一把锁；最多收 8KB，防刷屏输出撑爆内存
+                DataReceivedEventHandler onData = delegate (object s, DataReceivedEventArgs e)
                 {
-                    p.StartInfo = psi;
-                    p.Start();
-                    StringBuilder sb = new StringBuilder();
-                    try
+                    if (e == null || e.Data == null) return;
+                    lock (gate)
                     {
-                        string line = p.StandardOutput.ReadLine();
-                        if (line != null) sb.Append(line);
-                        string errLine = p.StandardError.ReadLine();
-                        if (errLine != null) sb.Append(' ').Append(errLine);
+                        if (sb.Length < 8192) sb.Append(e.Data).Append('\n');
                     }
-                    catch (Exception __ex) { Note.Swallow(__ex); }
-                    try { p.WaitForExit(5000); } catch (Exception __ex) { Note.Swallow(__ex); }
+                };
+
+                p = new Process();
+                p.StartInfo = psi;
+                p.OutputDataReceived += onData;
+                p.ErrorDataReceived += onData;
+                p.Start();
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+
+                if (!p.WaitForExit(ProbeTimeoutMs))
+                {
+                    // 超时：连它派生的子进程一起收掉，否则残留进程会继续占着 exe
+                    try { Native.KillProcessTree(p.Id); } catch (Exception __ex) { Note.Swallow(__ex); }
                     try { if (!p.HasExited) p.Kill(); } catch (Exception __ex) { Note.Swallow(__ex); }
-                    Match m = RxVer.Match(sb.ToString());
-                    if (m.Success) found = "v" + m.Groups[1].Value;
+                    try { p.WaitForExit(1500); } catch (Exception __ex) { Note.Swallow(__ex); }
                 }
+                // 退出后再取一次：给异步回调一点时间把最后几行塞进缓冲
+                string text;
+                lock (gate) { text = sb.ToString(); }
+                Match m = RxVer.Match(text);
+                if (m.Success) found = "v" + m.Groups[1].Value;
             }
             catch (Exception __ex)
             {
                 Note.Swallow(__ex);
                 found = "";
             }
+            finally
+            {
+                if (p != null)
+                {
+                    try { p.CancelOutputRead(); } catch (Exception __ex) { Note.Swallow(__ex); }
+                    try { p.CancelErrorRead(); } catch (Exception __ex) { Note.Swallow(__ex); }
+                    try { p.Dispose(); } catch (Exception __ex) { Note.Swallow(__ex); }
+                }
+            }
             if (found.Length > 0) Remember(exePath, found);
             return found;
+        }
+
+        /// <summary>探测超时（毫秒）：版本查询只是本地进程，5 秒已经极宽。</summary>
+        public const int ProbeTimeoutMs = 5000;
+
+        /// <summary>
+        /// 后台线程探测，结果回调回投（回调在后台线程执行，UI 调用方须自行 BeginInvoke 回主线程）。
+        /// UI 线程一律走这条路径，杜绝同步等待造成的界面假死（P1-3）。
+        /// </summary>
+        public static void ProbeAsync(string exePath, Action<string> done)
+        {
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string v = "";
+                try { v = Probe(exePath); }
+                catch (Exception __ex) { Note.Swallow(__ex); }
+                if (done != null)
+                {
+                    try { done(v); } catch (Exception __ex) { Note.Swallow(__ex); }
+                }
+            });
         }
 
         /// <summary>

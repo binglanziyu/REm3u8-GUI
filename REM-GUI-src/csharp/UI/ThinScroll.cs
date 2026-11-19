@@ -16,7 +16,8 @@ namespace Rem.UI
     /// <summary>自绘细滚动条，替代 TextBox / RichTextBox 的系统原生滚动条。</summary>
     public sealed class ThinScroll : Control
     {
-        private const int BarWidth = 9;
+        /// <summary>细条宽度（逻辑像素）。日志区要让出右内边距，故对外可见，避免两处硬编码走散。</summary>
+        public const int BarWidth = 9;
 
         private readonly Control target;
         private readonly Timer poll;
@@ -89,6 +90,13 @@ namespace Rem.UI
                 Invalidate();
             }
             catch (Exception __ex) { Note.Swallow(__ex); }
+        }
+
+        /// <summary>外部改过滚动位置（如日志控件自己的滚轮转发）后跳过节流立刻同步手柄几何。</summary>
+        public void SyncNow()
+        {
+            Sync(true);
+            Invalidate();
         }
 
         private void ReAlign()
