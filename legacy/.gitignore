@@ -1,0 +1,6 @@
+# 本目录是历史快照归档区，需要覆盖仓库根 .gitignore 的排除规则，
+# 否则 REm3u8-GUI-fixed/ 会被根级规则整体忽略而无法入库。
+!REm3u8-GUI-fixed/
+!REm3u8-GUI-fixed/**
+!*.patch
+!*.zip
