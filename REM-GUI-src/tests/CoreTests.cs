@@ -123,7 +123,9 @@ namespace Rem.Tests
                 Eq("SEG0", File.ReadAllText(Path.Combine(stream, "1.ts")), "补片执行: 用前一片顶替且内容一致");
                 Eq(4, Directory.GetFiles(stream, "*.ts").Length, "补片执行: 只新增不删除，共 4 片");
 
-                // 缺口过大（6/10 = 60% > 50%）时放弃，避免把成片补成同一片无限重复
+                // 缺口 6/10 = 60% > 50%，但这 6 片全是「磁盘上压根没有」的未下载分片：
+                // 未下载分片不进残片率闸门，必须照常顶替补齐把流程往下推。
+                // （实测缺 412/517 = 79.7% 曾被整组放弃，判坏 → .bad 留证 → 顶替整条分支永远执行不到）
                 string bigDir = Path.Combine(root, "big");
                 string bigStream = Path.Combine(bigDir, "0____");
                 Directory.CreateDirectory(bigStream);
@@ -143,10 +145,13 @@ namespace Rem.Tests
                 PatchReport big = SegmentPatcher.Patch(bigDir, true, null);
                 Eq(10, big.Total, "补片上限: 预期 10 片");
                 Eq(6, big.Missing, "补片上限: 缺 6 片");
-                Eq(0, big.Patched, "补片上限: 缺口过半不补");
-                Eq(6, big.Skipped, "补片上限: 放弃 6 片");
+                Eq(6, big.Absent, "补片口径: 6 片全部是未下载");
+                Eq(0, big.Bad, "补片口径: 没有已落盘残片");
+                Eq(6, big.Patched, "补片口径: 未下载分片不受残片率闸门限制，缺口过半照样补齐");
+                Eq(0, big.Skipped, "补片口径: 未下载分片不触发放弃");
+                Eq(10, Directory.GetFiles(bigStream, "*.ts").Length, "补片口径: 已补齐到 10 片");
 
-                // 只看缺失率，不再有绝对片数上限：100 片缺 50 片（正好 50%）也要全部补
+                // 未下载分片没有绝对片数上限：100 片缺 50 片也要全部补
                 string rateDir = Path.Combine(root, "rate");
                 string rateStream = Path.Combine(rateDir, "0____");
                 Directory.CreateDirectory(rateStream);
@@ -165,7 +170,7 @@ namespace Rem.Tests
                 Eq(0, rate.Skipped, "补片比例: 未触发放弃");
                 Eq(100, Directory.GetFiles(rateStream, "*.ts").Length, "补片比例: 已补齐到 100 片");
 
-                // 越过 50% 一线即放弃：100 片缺 51 片
+                // 越过 50% 一线也一样：100 片缺 51 片，缺的全是未下载分片，照常补齐
                 string overDir = Path.Combine(root, "over");
                 string overStream = Path.Combine(overDir, "0____");
                 Directory.CreateDirectory(overStream);
@@ -173,10 +178,12 @@ namespace Rem.Tests
                 for (int i = 0; i < 49; i++) File.WriteAllText(Path.Combine(overStream, i + ".ts"), "O" + i);
 
                 PatchReport over = SegmentPatcher.Patch(overDir, true, null);
-                Eq(0, over.Patched, "补片比例: 缺 51% 不补");
-                Eq(51, over.Skipped, "补片比例: 放弃 51 片");
+                Eq(51, over.Absent, "补片比例: 51 片全部是未下载");
+                Eq(51, over.Patched, "补片比例: 缺 51% 但都是未下载，照常补齐");
+                Eq(0, over.Skipped, "补片比例: 未下载分片不触发放弃");
+                Eq(100, Directory.GetFiles(overStream, "*.ts").Length, "补片比例: 已补齐到 100 片");
 
-                // 上限可调：100 片缺 30 片（30%），上限收紧到 20% 时整组放弃
+                // 上限可调：残片率上限同样只看已落盘残片，未下载缺口不受它约束
                 string customDir = Path.Combine(root, "custom");
                 string customStream = Path.Combine(customDir, "0____");
                 Directory.CreateDirectory(customStream);
@@ -184,8 +191,8 @@ namespace Rem.Tests
                 for (int i = 0; i < 70; i++) File.WriteAllText(Path.Combine(customStream, i + ".ts"), "C" + i);
 
                 PatchReport custom = SegmentPatcher.Patch(customDir, true, null, 20);
-                Eq(0, custom.Patched, "补片上限可调: 30% 缺口超 20% 上限不补");
-                Eq(30, custom.Skipped, "补片上限可调: 放弃 30 片");
+                Eq(30, custom.Patched, "补片上限可调: 30% 缺口全是未下载，上限 20% 也不放弃");
+                Eq(0, custom.Skipped, "补片上限可调: 未下载分片不触发放弃");
 
                 // 上限可调：同一场景上限放到 40% 时全部补齐
                 string custom2Dir = Path.Combine(root, "custom2");
@@ -231,6 +238,52 @@ namespace Rem.Tests
                     if (aesFiles[i].EndsWith(".ts", StringComparison.OrdinalIgnoreCase)) aesTsCount++;
                 }
                 Eq(10, aesTsCount, "加密流: 补齐后仍是 10 个分片，未误增");
+
+                // 残片率闸门本身没被取消，只是口径换成「只看已落盘残片」：
+                // 20 片全在盘上，5、15 两片被截断（残片率 10%），上限收紧到 5% 就必须拒绝补残片并留痕
+                string badRateDir = Path.Combine(root, "badrate");
+                string badRateStream = Path.Combine(badRateDir, "0____");
+                Directory.CreateDirectory(badRateStream);
+                StringBuilder badRateM3u = new StringBuilder("#EXTM3U" + "\n");
+                for (int i = 0; i < 20; i++) badRateM3u.Append("#EXTINF:4,").Append("\n").Append(i).Append(".ts\n");
+                File.WriteAllText(Path.Combine(badRateDir, "raw.m3u8"), badRateM3u.ToString());
+                for (int i = 0; i < 20; i++)
+                {
+                    bool cut = (i == 5 || i == 15);
+                    File.WriteAllBytes(Path.Combine(badRateStream, i + ".ts"), new byte[cut ? 150 : 160]);
+                }
+                PatchReport badRate = SegmentPatcher.Patch(badRateDir, true, null, 5);
+                Eq(20, badRate.Total, "残片闸门: 预期 20 片");
+                Eq(2, badRate.Bad, "残片闸门: 5、15 两片长度不齐 16 被判坏");
+                Eq(0, badRate.Absent, "残片闸门: 没有未下载分片");
+                Eq(0, badRate.Patched, "残片闸门: 残片率 10% 超 5% 上限，残片不补");
+                Eq(2, badRate.Skipped, "残片闸门: 放弃 2 片并留痕");
+                Ok(new FileInfo(Path.Combine(badRateStream, "5.ts")).Length == 150, "残片闸门: 残片保持原样，未被邻片覆盖");
+                Eq(0, Directory.GetFiles(badRateStream, "*.bad").Length, "残片闸门: 没补就不该有 .bad 留证");
+
+                // 口径分离的关键场景：残片率超限只挡残片，未下载分片照补。
+                // 40 片里 10-13 没下载、5 与 25 残损；上限 2% 时残片不补（Skipped 2），
+                // 但未下载的 4 片必须顶替补齐——正是这个分支保证「下载不完整」也能推进到合并
+                string mixedDir = Path.Combine(root, "mixed");
+                string mixedStream = Path.Combine(mixedDir, "0____");
+                Directory.CreateDirectory(mixedStream);
+                StringBuilder mixedM3u = new StringBuilder("#EXTM3U" + "\n");
+                for (int i = 0; i < 40; i++) mixedM3u.Append("#EXTINF:4,").Append("\n").Append(i).Append(".ts\n");
+                File.WriteAllText(Path.Combine(mixedDir, "raw.m3u8"), mixedM3u.ToString());
+                for (int i = 0; i < 40; i++)
+                {
+                    if (i >= 10 && i <= 13) continue;   // 未下载
+                    bool cut = (i == 5 || i == 25);
+                    File.WriteAllBytes(Path.Combine(mixedStream, i + ".ts"), new byte[cut ? 150 : 160]);
+                }
+                PatchReport mixed = SegmentPatcher.Patch(mixedDir, true, null, 2);
+                Eq(40, mixed.Total, "口径分离: 预期 40 片");
+                Eq(2, mixed.Bad, "口径分离: 5、25 两片判坏");
+                Eq(4, mixed.Absent, "口径分离: 10-13 四片未下载");
+                Eq(4, mixed.Patched, "口径分离: 残片不补，未下载的 4 片照常补齐");
+                Eq(2, mixed.Skipped, "口径分离: 只放弃 2 片残片");
+                Ok(File.Exists(Path.Combine(mixedStream, "10.ts")), "口径分离: 未下载分片已顶替补上");
+                Ok(new FileInfo(Path.Combine(mixedStream, "5.ts")).Length == 150, "口径分离: 残片原样保留");
 
                 // 非加密流：正常分片长度本来就五花八门，一律不许按长度判坏
                 string plainDir = Path.Combine(root, "plain");

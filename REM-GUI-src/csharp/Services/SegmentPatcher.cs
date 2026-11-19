@@ -33,10 +33,12 @@ namespace Rem.Services
     {
         public int Total = 0;       // 预期分片总数（各流累加）
         public int Present = 0;     // 本来就在的
-        public int Missing = 0;     // 缺失的
+        public int Missing = 0;     // 缺失的（未下载 + 已落盘残损）
+        public int Absent = 0;      // 缺失里「磁盘上压根没有」的部分
+        public int Bad = 0;         // 缺失里「文件在盘上但残损」的部分
         public int Patched = 0;     // 已用相邻分片补上的
         public int Failed = 0;      // 缺了但找不到可用相邻分片
-        public int Skipped = 0;     // 缺口过大、按策略放弃补的
+        public int Skipped = 0;     // 残片过多、按策略放弃补的
         public List<PatchItem> Items = new List<PatchItem>();
         public string Summary = "";
 
@@ -49,10 +51,13 @@ namespace Rem.Services
         //   0____ 的后缀是 4 个下划线（流序号 + 分隔符），不同版本可能换成别的数字
         private const string StreamSuffix = "____";
 
-        // 补片上限只看「缺失率」：缺片占比不超过该比例就一律补，不设绝对片数硬上限
-        // （1000 片允许补到 500 片）。整段缺失靠邻片顶替会把成片补成同一片反复重复，
-        // 内容严重失真，比老实报错更坑，所以超过这个比例才整组放弃。
-        // 默认 50%；高级设置「补片上限」（配置键 patchPercent）可按 1–70 调整，经 maxPercent 参数传入。
+        // 补片上限只看「已落盘残片率」：坏片（文件在、内容解不开）占比不超过该比例才补，
+        // 不设绝对片数硬上限（1000 片允许补到 500 片）。残片靠邻片顶替会把成片补成同一片
+        // 反复重复，内容严重失真、比老实报错更坑，所以残片过多才整组放弃。
+        // 注意「未下载」分片不计入残片率：那是干净的空位，顶替补齐后至少能出片，后续续传
+        // 还能换回真片；若把未下载分片也算进分母/分子，一次大缺口就会把补片整条路堵死
+        // （实测缺 412/517 = 79.7% 直接放弃，判坏分支与 .bad 留证永远执行不到）。
+        // 默认 50%；高级设置「补片上限」（配置键 patchPercent）可按 1–70 调整，经 maxPercent 传入。
         public const int MaxPatchPercent = 50;
 
         // 判定「这条流确实被 AES 加密过」的门槛：样本至少这么多片，且其中长度能被 16 整除的
@@ -68,7 +73,7 @@ namespace Rem.Services
         /// <param name="tmpDir">引擎的 --tmp-dir 值（形如 &lt;保存目录&gt;\.parts\&lt;名字&gt;）</param>
         /// <param name="apply">false 时只统计不改盘（供测试与预演使用）</param>
         /// <param name="log">可空</param>
-        /// <param name="maxPercent">缺失率上限（%）：超过就整组放弃；默认 MaxPatchPercent，可由配置调整</param>
+        /// <param name="maxPercent">残片率上限（%）：只看已落盘残损分片的占比，超过就不再补残片；未下载分片不受此限；默认 MaxPatchPercent，可由配置调整</param>
         public static PatchReport Patch(string tmpDir, bool apply, Logger log, int maxPercent = MaxPatchPercent)
         {
             PatchReport report = new PatchReport();
@@ -100,9 +105,10 @@ namespace Rem.Services
 
             StringBuilder sb = new StringBuilder();
             sb.Append("分片 ").Append(report.Total).Append(" 个，缺失 ").Append(report.Missing);
+            sb.Append("（未下载 ").Append(report.Absent).Append("，已落盘残损 ").Append(report.Bad).Append("）");
             sb.Append("，已补 ").Append(report.Patched);
             if (report.Failed > 0) sb.Append("，无法补 ").Append(report.Failed);
-            if (report.Skipped > 0) sb.Append("，缺口过大放弃 ").Append(report.Skipped);
+            if (report.Skipped > 0) sb.Append("，残片过多放弃 ").Append(report.Skipped);
             report.Summary = sb.ToString();
             return report;
         }
@@ -269,49 +275,63 @@ namespace Rem.Services
                 // 对不齐 16 的就是源站尾部写截断的残片（解密必抛 CryptographicException）。
                 // 这类残片文件名合法、在盘上「存在」，老逻辑只看文件名永远算 Present，补片根本碰不到它
                 bool aesStream = LooksAesEncrypted(map);
-                List<int> bad = new List<int>();
-                List<int> missing = new List<int>();
+                List<int> absent = new List<int>();     // 压根没下载：盘上连文件都没有
+                List<int> bad = new List<int>();        // 已落盘但残损：文件在、内容解不开
                 for (int i = 0; i < total; i++)
                 {
                     report.Total++;
-                    if (map.ContainsKey(i))
+                    if (!map.ContainsKey(i))
                     {
-                        if (aesStream && IsBrokenAesPart(map[i]))
+                        absent.Add(i);
+                        continue;
+                    }
+                    if (aesStream && IsBrokenAesPart(map[i]))
+                    {
+                        bad.Add(i);
+                        if (log != null)
                         {
-                            bad.Add(i);
-                            if (log != null)
-                            {
-                                log.Warn(">> 补片：" + Path.GetFileName(map[i]) + " 长度 " + FileLength(map[i])
-                                         + " 不是 16 的整数倍，判定为解密不了的坏片");
-                            }
+                            log.Warn(">> 补片：" + Path.GetFileName(map[i]) + " 长度 " + FileLength(map[i])
+                                     + " 不是 16 的整数倍，判定为解密不了的坏片");
                         }
-                        else
+                        continue;
+                    }
+                    report.Present++;
+                }
+                if (absent.Count == 0 && bad.Count == 0) continue;
+                report.Missing += absent.Count + bad.Count;
+                report.Absent += absent.Count;
+                report.Bad += bad.Count;
+
+                // 闸门只针对「已落盘但残损」的坏片：残片靠邻片顶替只会在成片里反复重复同一画面，
+                // 残片占比过高说明源站这批数据本身就烂，补也救不回来，才整组放弃。
+                // 「未下载」分片是干净的空位，顶替补齐后至少能出片、后续续传还能换回真片，
+                // 所以一律不进闸门——否则一次大缺口就把补片整条路堵死，判坏 → .bad 留证 →
+                // 相邻顶替这条分支永远执行不到（实测缺 412/517 时正是这样被整组放弃的）。
+                List<int> todo = new List<int>(absent);
+                if (bad.Count > 0)
+                {
+                    if (bad.Count * 100 > total * maxPercent)
+                    {
+                        report.Skipped += bad.Count;
+                        if (log != null)
                         {
-                            report.Present++;
-                            continue;
+                            log.Warn(">> 补片：" + Path.GetFileName(dir) + " 的 " + ext + " 已落盘残片 "
+                                     + bad.Count + "/" + total + "，超过自动补片上限（残片率 "
+                                     + maxPercent + "%），残片不补；未下载的 " + absent.Count
+                                     + " 片仍照常顶替补齐");
                         }
                     }
-                    missing.Add(i);
-                }
-                if (missing.Count == 0) continue;
-                report.Missing += missing.Count;
-
-                // 缺口占比过大才整组放弃：整段缺失靠邻片顶替会把成片补成“同一片无限重复”，得不偿失
-                if (missing.Count * 100 > total * maxPercent)
-                {
-                    report.Skipped += missing.Count;
-                    if (log != null)
+                    else
                     {
-                        log.Warn(">> 补片：" + Path.GetFileName(dir) + " 的 " + ext + " 缺 " + missing.Count
-                                 + "/" + total + "，超过自动补片上限（缺失率 "
-                                 + maxPercent + "%），放弃补片");
+                        todo.AddRange(bad);
                     }
-                    continue;
                 }
+                if (todo.Count == 0) continue;
+                todo.Sort();
 
-                for (int m = 0; m < missing.Count; m++)
+                for (int m = 0; m < todo.Count; m++)
                 {
-                    int i = missing[m];
+                    int i = todo[m];
                     PatchItem item = new PatchItem();
                     item.Dir = dir;
                     item.Index = i;
@@ -392,11 +412,16 @@ namespace Rem.Services
             return aligned * 100 >= sampled * AesAlignPercent;
         }
 
-        /// <summary>加密流里长度对不上 16 的分片一定解不开，属于「残缺但存在」的坏片。</summary>
+        /// <summary>
+        /// 加密流里长度对不上 16 的分片一定解不开，属于「残缺但存在」的坏片；
+        /// 0 字节文件同样是无内容的空壳，一并判坏。读长度失败按「未知」处理，不误判。
+        /// </summary>
         public static bool IsBrokenAesPart(string path)
         {
             long len = FileLength(path);
-            return len > 0 && len % 16 != 0;
+            if (len < 0) return false;
+            if (len == 0) return true;
+            return len % 16 != 0;
         }
 
         /// <summary>取分片字节数；读不到返回 -1（按「未知」处理，不判好也不判坏）。</summary>
@@ -407,11 +432,27 @@ namespace Rem.Services
             catch (Exception __ex) { Note.Swallow(__ex); return -1; }
         }
 
-        /// <summary>挑一个完好的相邻分片顶替第 i 片：前后都试，跳过已判定为坏片的索引。</summary>
+        /// <summary>
+        /// 挑一个完好的相邻分片顶替第 i 片：先向前找最近的、再向后找最近的，跳过已判定为坏片的索引。
+        /// 不能只看 ±1：整段连续缺口时 ±1 常常也不在盘上，只看一圈会白浪费一次补片机会。
+        /// 优先向前：补片循环按索引升序推进，前一枚往往刚被补上，正好形成链式沿用同一画面，
+        /// 视觉上比跳动到后方更连贯。
+        /// </summary>
         private static int PickSource(SortedDictionary<int, string> map, int i, List<int> bad)
         {
-            if (map.ContainsKey(i - 1) && !bad.Contains(i - 1)) return i - 1;
-            if (map.ContainsKey(i + 1) && !bad.Contains(i + 1)) return i + 1;
+            int front = -1;
+            foreach (int k in map.Keys)
+            {
+                if (k >= i || bad.Contains(k)) continue;
+                front = k;
+            }
+            if (front >= 0) return front;
+
+            foreach (int k in map.Keys)
+            {
+                if (k <= i || bad.Contains(k)) continue;
+                return k;
+            }
             return -1;
         }
 

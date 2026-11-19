@@ -196,6 +196,14 @@ namespace Rem.UI
                 return false;
             }
 
+            // 口径交代清楚：未下载是干净空位（顶替补齐还能续传换回真片），残片才是真坏料，
+            // 残片率超限才放弃——两者混算曾把一次大缺口判成「缺口过大」直接堵死补片
+            if (pr.Bad > 0 || pr.Absent > 0)
+            {
+                log.Dim(">> 补片口径：未下载 " + pr.Absent + " 片（无文件，直接顶替）、已落盘残损 "
+                        + pr.Bad + " 片（按 AES 长度/Tail 对齐判坏，超残片率上限才放弃）");
+            }
+
             log.Ok(">> 补片结果：" + pr.Summary + "，分片已补齐，继续合并");
             return RestartRun();
         }
