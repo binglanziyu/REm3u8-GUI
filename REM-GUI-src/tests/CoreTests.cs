@@ -69,6 +69,7 @@ namespace Rem.Tests
             TestArgBuilder();
             TestProgress();
             TestSegmentPatcher();
+            TestSponsorAndTmpGuard();
 
             Console.WriteLine();
             Console.WriteLine("pass=" + pass + "  fail=" + fail);
@@ -80,6 +81,102 @@ namespace Rem.Tests
             }
             Console.WriteLine("ALL PASS");
             return 0;
+        }
+
+        // ---------------- 赞助提醒频率（收敛 / 周期 / 到期） ----------------
+        // ---------------- 续传临时目录归属校验（P1-1） ----------------
+        private static void TestSponsorAndTmpGuard()
+        {
+            // ---- 频率收敛：任何脏值都必须落到默认「每周一次」 ----
+            Eq(Sponsor.FreqDay, Sponsor.NormalizeFreq("day"), "频率: day 原样保留");
+            Eq(Sponsor.FreqDay, Sponsor.NormalizeFreq("DAY"), "频率: 大写 DAY 也认");
+            Eq(Sponsor.FreqWeek, Sponsor.NormalizeFreq("week"), "频率: week 原样保留");
+            Eq(Sponsor.FreqWeek, Sponsor.NormalizeFreq(""), "频率: 空串 → 默认每周");
+            Eq(Sponsor.FreqWeek, Sponsor.NormalizeFreq(null), "频率: null → 默认每周");
+            Eq(Sponsor.FreqWeek, Sponsor.NormalizeFreq("monthly"), "频率: 未知值 monthly → 默认每周");
+            Eq(Sponsor.FreqWeek, Sponsor.NormalizeFreq(" day "), "频率: 带空格不认（严格匹配，避免手改配置蒙对）");
+            Eq(Sponsor.FreqWeek, Sponsor.FreqDefault, "频率: 默认值即每周一次");
+            Eq("每周一次", Sponsor.FreqLabel("week"), "频率文案: week → 每周一次");
+            Eq("每日一次", Sponsor.FreqLabel("day"), "频率文案: day → 每日一次");
+            Eq("每周一次", Sponsor.FreqLabel("bad"), "频率文案: 脏值按每周一次显示");
+
+            // ---- 周期小时数 ----
+            Eq(24, Sponsor.PeriodHours("day"), "周期: 每日一次 = 24 小时");
+            Eq(168, Sponsor.PeriodHours("week"), "周期: 每周一次 = 168 小时");
+            Eq(168, Sponsor.PeriodHours("bad"), "周期: 脏值按每周 168 小时算");
+
+            // ---- 到期判定 ----
+            DateTime baseUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            long baseTs = Sponsor.ToUnix(baseUtc);
+            Eq(0, (int)Sponsor.ToUnix(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)), "时间戳: 纪元 0 点为 0");
+            Ok(Sponsor.Due("week", 0, baseUtc), "到期: 从未弹过（0）直接到期");
+            Ok(Sponsor.Due("week", baseTs, baseUtc.AddHours(168)), "到期: 每周一次满 168 小时 → 弹");
+            Ok(!Sponsor.Due("week", baseTs, baseUtc.AddHours(167)), "到期: 每周一次 167 小时 → 不弹");
+            Ok(Sponsor.Due("day", baseTs, baseUtc.AddHours(24)), "到期: 每日一次满 24 小时 → 弹");
+            Ok(!Sponsor.Due("day", baseTs, baseUtc.AddHours(23)), "到期: 每日一次 23 小时 → 不弹");
+            Ok(!Sponsor.Due("day", baseTs, baseUtc.AddHours(-5)), "到期: 时钟回拨（now 早于 last）→ 不弹，避免反复弹");
+            Ok(!Sponsor.Due("day", baseTs, baseUtc), "到期: 同一时刻 → 不弹（同周期不重复弹）");
+
+            // ---- Touch / DueNow：写入时间戳后同周期静默 ----
+            AppConfig sc = new AppConfig();
+            Eq("week", sc.SponsorFreq, "配置: 默认频率字段就是 week");
+            Ok(sc.SponsorLastUtc == 0, "配置: 上次弹出时间默认为 0");
+            Ok(Sponsor.DueNow(sc), "首次启动: 从未弹过 → 到期该弹一次");
+            Sponsor.Touch(sc, baseUtc);
+            Eq((int)baseTs, (int)sc.SponsorLastUtc, "Touch: 写入的 UTC 秒与传入时间一致");
+            Ok(!Sponsor.Due("week", sc.SponsorLastUtc, baseUtc.AddDays(6)), "同周期: 6 天后仍不重复弹");
+            Ok(Sponsor.Due("week", sc.SponsorLastUtc, baseUtc.AddDays(7)), "跨周期: 7 天后到期待弹");
+            Ok(Sponsor.Due("day", sc.SponsorLastUtc, baseUtc.AddDays(1)), "改成每日后：满 24 小时即到期");
+
+            AppConfig dirty = new AppConfig();
+            dirty.SponsorFreq = "DAY";
+            dirty.SponsorLastUtc = -12345;
+            dirty.Clamp();
+            Eq("day", dirty.SponsorFreq, "Clamp: 频率大小写被收敛成 day");
+            Ok(dirty.SponsorLastUtc == 0, "Clamp: 负数时间戳被拉回 0（视为从未弹过）");
+            dirty.SponsorFreq = "whatever";
+            dirty.Clamp();
+            Eq("week", dirty.SponsorFreq, "Clamp: 未知频率被收敛成 week");
+            Ok(!Sponsor.DueNow(null), "DueNow: 配置为空一律不弹");
+
+            // ---- 续传临时目录归属校验（P1-1）----
+            string sd = Path.Combine(Path.GetTempPath(), "rem_tmpg_" + Guid.NewGuid().ToString("N"));
+            Eq("", TmpGuard.Norm(""), "归一化: 空串 → 空串");
+            Eq("", TmpGuard.Norm(null), "归一化: null → 空串");
+            Eq(TmpGuard.Norm(sd), TmpGuard.Norm(sd + "\\"), "归一化: 去掉尾部反斜杠");
+            Eq(TmpGuard.Norm(sd), TmpGuard.Norm(sd + "\\.parts\\.."), "归一化: 折叠 .. 段");
+
+            string want = TmpGuard.Expected(sd, "demo");
+            Eq(TmpGuard.Norm(Path.Combine(sd, ".parts", "demo")), want, "预期目录: <saveDir>\\.parts\\<名字>");
+            Eq("", TmpGuard.Expected("", "demo"), "预期目录: saveDir 空 → 空串");
+            Eq("", TmpGuard.Expected(sd, ""), "预期目录: 名字空 → 空串");
+
+            Ok(TmpGuard.Owned(sd, "demo", want), "归属: 完全一致 → 认");
+            Ok(TmpGuard.Owned(sd, "demo", Path.Combine(want, "0____")), "归属: 分片子目录 → 认");
+            Ok(TmpGuard.Owned(sd, "demo", want.ToUpperInvariant()), "归属: 只差大小写 → 认（Windows 口径）");
+            Ok(!TmpGuard.Owned(sd, "demo", Path.Combine(sd, ".parts", "demo2")), "归属: 同前缀 demo2 → 不认");
+            Ok(!TmpGuard.Owned(sd, "demo", sd), "归属: 保存目录本身 → 不认");
+            Ok(!TmpGuard.Owned(sd, "demo", Path.Combine(sd, ".parts")), "归属: .parts 父目录 → 不认");
+            Ok(!TmpGuard.Owned(sd, "demo", "D:\\"), "归属: 盘根 → 不认（防止递归删整盘）");
+            Ok(!TmpGuard.Owned(sd, "demo", ""), "归属: 空串 → 不认");
+            Ok(!TmpGuard.Owned(sd, "demo", null), "归属: null → 不认");
+            Ok(!TmpGuard.Owned("", "demo", want), "归属: saveDir 空 → 不认");
+
+            Ok(ArgBuilder.OwnedResumeTmp(sd, "demo", "https://a.com/v.m3u8", want), "OwnedResumeTmp: 预期目录 → 认");
+            Ok(!ArgBuilder.OwnedResumeTmp(sd, "demo", "https://a.com/v.m3u8", "D:\\"), "OwnedResumeTmp: 盘根 → 不认");
+            Ok(!ArgBuilder.OwnedResumeTmp(sd, "demo", "https://a.com/v.m3u8", ""), "OwnedResumeTmp: 空 tmp → 不认");
+
+            AppConfig ac = new AppConfig();
+            ac.SaveDir = sd;
+            BuiltArgs good = ArgBuilder.Build(ac, "https://a.com/v.m3u8", sd, "demo", "eng.exe", "", "", want, "");
+            Eq(TmpGuard.Norm(want), TmpGuard.Norm(good.TmpDir), "ArgBuilder: 合法续传 tmp 被采纳");
+            Eq("", good.TmpRejected, "ArgBuilder: 合法续传 tmp 不产生拒绝记录");
+            Eq(TmpGuard.Norm(want), TmpGuard.Norm(ArgVal(good.Args, "--tmp-dir")), "ArgBuilder: --tmp-dir 下发的就是合法 tmp");
+
+            BuiltArgs bad = ArgBuilder.Build(ac, "https://a.com/v.m3u8", sd, "demo", "eng.exe", "", "", "D:\\", "");
+            Eq(TmpGuard.Norm(Path.Combine(sd, ".parts", "demo")), TmpGuard.Norm(bad.TmpDir), "ArgBuilder: 越界 tmp 被丢弃并重建 .parts\\<名字>");
+            Eq("D:\\", bad.TmpRejected, "ArgBuilder: 越界 tmp 记入 TmpRejected 供界面提示");
+            Eq(TmpGuard.Norm(Path.Combine(sd, ".parts", "demo")), TmpGuard.Norm(ArgVal(bad.Args, "--tmp-dir")), "ArgBuilder: --tmp-dir 不得下发越界路径");
         }
 
         // ---------------- SegmentPatcher：坏片自动补片 ----------------

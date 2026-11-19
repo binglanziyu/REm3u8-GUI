@@ -20,6 +20,9 @@ namespace Rem.Engine
         public string TmpDir = "";
         public string LogFile = "";
         public string CommandLine = "";
+
+        /// <summary>被拒绝的续传临时目录（非空表示 resume 里的 tmp 未被采用，已按新任务重建）。</summary>
+        public string TmpRejected = "";
     }
 
     public static class ArgBuilder
@@ -41,16 +44,26 @@ namespace Rem.Engine
 
             bool resume = !string.IsNullOrEmpty(resumeTmp);
 
-            string name = Safe.FileName(rawName);
-            if (name.Length == 0) name = Safe.FileName(GuessNameFromUrl(url));
-            if (name.Length == 0) name = "download_" + DateTime.Now.ToString("MMdd_HHmmss");
-            if (!resume) name = UniqueName(saveDir, name);
+            // 任务名可能来自用户手输、剪贴板或 resume 文件，先统一过 mojibake 修复，
+            // 否则乱码会一路带进 --save-name、成品文件名和日志标题（Core\Enc.cs）
+            string name = ResolveName(saveDir, rawName, url, resume);
             b.SaveName = name;
 
             // 续传时 resumeTmp 已经是「...\.parts\<名字>」的最终值（续传文件里写的就是它），
             // 这里再拼一次文件名会变成「...\.parts\名\名」，引擎永远命中不了原分片，
             // 表现为「续传静默退化成全量重下 + .parts 下每次再叠一层同名目录」（D1）
-            b.TmpDir = resume ? resumeTmp : Path.Combine(saveDir, ".parts", name);
+            // P1-1：resume 里的 tmp 来自纯文本文件，任何人改它都能让本程序把 --tmp-dir
+            // 指到任意目录、并在成功后对其做整树删除。只有落在本任务专属的 .parts\<名字>
+            // 之下才采信，否则忽略并重建（同时记进 TmpRejected 让上层提示）。
+            if (resume && TmpGuard.Owned(saveDir, name, resumeTmp))
+            {
+                b.TmpDir = resumeTmp;
+            }
+            else
+            {
+                if (resume) b.TmpRejected = resumeTmp;
+                b.TmpDir = Path.Combine(saveDir, ".parts", name);
+            }
 
             List<string> a = b.Args;
             a.Add(url);
@@ -219,6 +232,27 @@ namespace Rem.Engine
                 list.Add(key + ": " + val);
             }
             return list;
+        }
+
+        /// <summary>
+        /// 任务名解析（Build 与续传 tmp 归属校验共用同一口径，避免两处算出不同名字导致误判）：
+        /// 手输/记录名 → URL 猜测 → 时间戳兜底；非续传再做同名去重。
+        /// </summary>
+        public static string ResolveName(string saveDir, string rawName, string url, bool resume)
+        {
+            string name = Safe.FileName(Enc.Repair(rawName));
+            if (name.Length == 0) name = Safe.FileName(Enc.Repair(GuessNameFromUrl(url)));
+            if (name.Length == 0) name = "download_" + DateTime.Now.ToString("MMdd_HHmmss");
+            if (!resume) name = UniqueName(saveDir, name);
+            return name;
+        }
+
+        /// <summary>续传临时目录是否归属本次任务（供 UI 在加载 resume 时先给出提示，最终仍由 Build 二次把关）。</summary>
+        public static bool OwnedResumeTmp(string saveDir, string rawName, string url, string tmp)
+        {
+            if (string.IsNullOrEmpty(tmp)) return false;
+            string name = ResolveName(saveDir, rawName, url, true);
+            return TmpGuard.Owned(saveDir, name, tmp);
         }
 
         /// <summary>同名去重：目标目录已存在同名媒体文件则追加 _2/_3…，规避 RE 的 .copy 链。</summary>

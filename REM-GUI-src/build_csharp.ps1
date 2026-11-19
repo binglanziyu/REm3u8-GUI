@@ -234,6 +234,12 @@ $cscArgs += '/resource:"' + $ffExe + '",ffmpeg.exe'
 # 更新清单以 /resource 内嵌（资源名固定 update.json，与 UpdateChecker.EmbeddedResourceName 对齐）：
 # 交付只发一个 REM-GUI.exe 时，运行时靠这份内置清单检查更新，不再依赖外部 update.json
 $cscArgs += '/resource:"' + $ujPath + '",update.json'
+# 赞助窗口的赞赏码同样内嵌：单文件交付时不能依赖磁盘上的图片路径。
+# 资源名固定 sponsor_wechat.png，与 SponsorForm.ResWechat 对齐。
+$spWechat = Join-Path $prjRoot 'docs\sponsor\wechat.png'
+if (-not (Test-Path -LiteralPath $spWechat)) { throw ("缺少赞助赞赏码图片：{0}。赞助窗口靠内嵌资源显示，缺图会变成空图。" -f $spWechat) }
+$cscArgs += '/resource:"' + $spWechat + '",sponsor_wechat.png'
+Write-Host ("== 内嵌赞赏码 == wechat.png {0:N0} B" -f (Get-Item -LiteralPath $spWechat).Length)
 Write-Host ("== 内嵌自愈源 == N_m3u8DL-RE.exe {0:N2} MB / ffmpeg.exe {1:N2} MB（来自 {2} 顶层）" -f ((Get-Item -LiteralPath $reExe).Length / 1MB), ((Get-Item -LiteralPath $ffExe).Length / 1MB), $distDir)
 Write-Host ("== 内嵌清单 == update.json {0} B（version {1}）" -f (Get-Item -LiteralPath $ujPath).Length, $appVer)
 $cscArgs += $srcArgs
@@ -265,7 +271,7 @@ else {
 try {
     $asm = [System.Reflection.Assembly]::LoadFile($outExe)
     $names = @($asm.GetManifestResourceNames())
-    $need = @('N_m3u8DL-RE.exe', 'ffmpeg.exe', 'update.json')
+    $need = @('N_m3u8DL-RE.exe', 'ffmpeg.exe', 'update.json', 'sponsor_wechat.png')
     $lost = @()
     foreach ($n in $need) { if ($names -notcontains $n) { $lost += $n } }
     if ($lost.Count -gt 0) {

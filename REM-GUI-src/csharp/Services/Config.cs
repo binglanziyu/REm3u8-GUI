@@ -73,6 +73,12 @@ namespace Rem.Services
         public string EngineExt = "";
         public int LogLimit = 200000;
 
+        /// <summary>赞助提醒频率："week"（每周一次，默认）/ "day"（每日一次）。取值统一经 Sponsor.NormalizeFreq 收敛。</summary>
+        public string SponsorFreq = Rem.Services.Sponsor.FreqDefault;
+
+        /// <summary>上次自动弹出赞助窗口的 Unix 秒时间戳；0 表示从未弹过。同一周期内不重复弹。</summary>
+        public long SponsorLastUtc = 0;
+
         /// <summary>配置结构版本：用来把老配置一次性迁到新默认值，之后用户手动改动不再被覆盖。</summary>
         public int CfgRev = CfgRevCurrent;
 
@@ -111,6 +117,9 @@ namespace Rem.Services
 
         public void Clamp()
         {
+            // 赞助提醒频率只认两个值，其余（含空串/被手改成别的）一律回落默认「每周一次」
+            SponsorFreq = Rem.Services.Sponsor.NormalizeFreq(SponsorFreq);
+            if (SponsorLastUtc < 0) SponsorLastUtc = 0;
             if (SpeedMB < 0) SpeedMB = 0;
             if (SpeedMB > SpeedMaxMB) SpeedMB = SpeedMaxMB;
             SpeedMB = Math.Round(SpeedMB, 3, MidpointRounding.AwayFromZero);
@@ -210,6 +219,9 @@ namespace Rem.Services
                 c.EngineSel = j.GetStr("engineSel", c.EngineSel);
                 c.EngineExt = j.GetStr("engineExt", c.EngineExt);
                 c.LogLimit = j.GetInt("logLimit", c.LogLimit);
+                // 赞助提醒：频率字符串 + 上次弹出时间戳（Unix 秒，JSON 只有 double，2^53 内换算无损）
+                c.SponsorFreq = Rem.Services.Sponsor.NormalizeFreq(j.GetStr("sponsorFreq", c.SponsorFreq));
+                c.SponsorLastUtc = (long)j.GetDouble("sponsorLastUtc", c.SponsorLastUtc);
 
                 // 老配置（没有 cfgRev）里 mux/autoSelect 是旧默认 false，还可能残留 e2e 测试留下的
                 // "跳过合并/仅解析"；一次性迁到新默认，之后完全尊重用户自己的勾选。
@@ -347,6 +359,8 @@ namespace Rem.Services
                 j.Set("engineSel", c.EngineSel);
                 j.Set("engineExt", c.EngineExt);
                 j.Set("logLimit", c.LogLimit);
+                j.Set("sponsorFreq", Rem.Services.Sponsor.NormalizeFreq(c.SponsorFreq));
+                j.Set("sponsorLastUtc", (double)c.SponsorLastUtc);
                 j.Set("cfgRev", AppConfig.CfgRevCurrent);
 
                 string dir = Path.GetDirectoryName(path);

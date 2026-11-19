@@ -90,7 +90,8 @@ namespace Rem.Services
             if (text == null) return;
             // 落盘前统一过一遍凭证掩码（HLS 密钥 / Cookie / Authorization / ?token= 等）。
             // 这里是日志的最后一闸：调用方哪怕漏了打码，也不会有明文密钥写进日志文件。
-            string full = Mask.Secret(text);
+            // 先修 mojibake 再打码：乱码文本里的密钥/URL 同样要按原文判定（Enc 只在疑似乱码时动手）
+            string full = Mask.Secret(Enc.Repair(text));
             string view = full;
             // 只在界面侧收敛长度；落盘保留完整的（已掩码）原文，排障时尾部信息不能丢
             if (view.Length > MaxViewChars) view = view.Substring(0, MaxViewChars - 40) + " …（原文 " + full.Length + " 字符，见日志文件）";
@@ -151,7 +152,7 @@ namespace Rem.Services
             try
             {
                 // 诊断日志同样过掩码：历史上的 diag.log 里出现过明文 HLS 密钥串
-                msg = Mask.Secret(msg);
+                msg = Mask.Secret(Enc.Repair(msg));
                 string key = (tag == null ? "" : tag) + "|" + Head60(msg);
                 DateTime now = DateTime.Now;
                 lock (gate)

@@ -2,6 +2,7 @@
 //  Interop\Native.cs — 系统 API：暗色标题栏、暗色滚动条、Job 对象、重绘控制
 // =====================================================================
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 using Rem.Core;
@@ -46,7 +47,44 @@ namespace Rem.Interop
         public const int EM_GETLINECOUNT = 0x00BA;
         public const int EM_GETFIRSTVISIBLELINE = 0x00CE;
         public const int EM_LINESCROLL = 0x00B6;
+        public const int EM_SETRECT = 0x00B3;
         public const int WM_MOUSEWHEEL = 0x020A;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+        public static extern IntPtr SendMessageRect(IntPtr hWnd, int msg, IntPtr wParam, ref RECT lParam);
+
+        /// <summary>
+        /// 给 RichEdit 设格式化矩形，右侧留出 inset 像素空白。
+        /// 日志控件不再申请原生竖条后，文本会一直铺到控件右缘，必须让出这一点宽度给自绘 ThinScroll，
+        /// 否则每行行尾会被压在细条底下。RichEdit 在尺寸变化时会按同一 inset 自动重算，这里做兜底重设。
+        /// </summary>
+        public static void SetTextRightInset(IntPtr hwnd, int clientWidth, int clientHeight, int inset)
+        {
+            if (hwnd == IntPtr.Zero) return;
+            try
+            {
+                if (inset < 0) { inset = 0; }
+                int right = clientWidth - inset;
+                if (right < 16) { right = 16; }
+                if (clientHeight < 1) { clientHeight = 1; }
+                RECT rc = new RECT();
+                rc.Left = 0;
+                rc.Top = 0;
+                rc.Right = right;
+                rc.Bottom = clientHeight;
+                SendMessageRect(hwnd, EM_SETRECT, IntPtr.Zero, ref rc);
+            }
+            catch (Exception __ex) { Note.Swallow(__ex); }
+        }
 
         [DllImport("user32.dll")]
         public static extern bool ShowScrollBar(IntPtr hWnd, int wBar, bool bShow);
@@ -201,6 +239,150 @@ namespace Rem.Interop
                 return IntPtr.Zero;
             }
             return job;
+        }
+
+        // ---------- 进程树强杀（P1-2：暂停要连 ffmpeg 子进程一起收掉） ----------
+        // Job 对象在正常路径下已经能连带子进程，但 AssignProcessToJobObject 存在失败场景
+        // （引擎已被别的 Job 占用、或作业对象创建失败），此时过去只 Kill 了引擎本体，
+        // 混流阶段的 ffmpeg 会残留下来继续占着成品文件与 CPU。这里补一条按 Toolhelp32
+        // 枚举父子关系、自底向上强杀整棵树的兜底路径。
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct PROCESSENTRY32W
+        {
+            public uint dwSize;
+            public uint cntUsage;
+            public uint th32ProcessID;
+            public IntPtr th32DefaultHeapID;
+            public uint th32ModuleID;
+            public uint cntThreads;
+            public uint th32ParentProcessID;
+            public int pcPriClassBase;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string szExeFile;
+        }
+
+        public const uint TH32CS_SNAPPROCESS = 0x00000002;
+        public const uint PROCESS_TERMINATE = 0x0001;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool Process32FirstW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool Process32NextW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+
+        private const int INVALID_HANDLE_VALUE_I = -1;
+
+        /// <summary>
+        /// 取全系统父子关系快照：pid → parentPid。失败返回空表（调用方据此退化为只杀根进程）。
+        /// </summary>
+        private static Dictionary<int, int> SnapshotParents()
+        {
+            Dictionary<int, int> map = new Dictionary<int, int>();
+            IntPtr snap = IntPtr.Zero;
+            try
+            {
+                snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if (snap == IntPtr.Zero || snap.ToInt64() == INVALID_HANDLE_VALUE_I) return map;
+                PROCESSENTRY32W pe = new PROCESSENTRY32W();
+                pe.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
+                if (!Process32FirstW(snap, ref pe)) return map;
+                do
+                {
+                    map[(int)pe.th32ProcessID] = (int)pe.th32ParentProcessID;
+                    pe.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
+                }
+                while (Process32NextW(snap, ref pe));
+            }
+            catch (Exception __ex) { Note.Swallow(__ex); }
+            finally
+            {
+                if (snap != IntPtr.Zero && snap.ToInt64() != INVALID_HANDLE_VALUE_I)
+                {
+                    try { CloseHandle(snap); } catch (Exception __ex) { Note.Swallow(__ex); }
+                }
+            }
+            return map;
+        }
+
+        /// <summary>把某进程的所有后代按「由深到浅」排列（先杀叶子，避免父进程先死导致子进程被过继）。</summary>
+        public static List<int> DescendantsDeepestFirst(int rootPid)
+        {
+            List<int> order = new List<int>();
+            try
+            {
+                Dictionary<int, int> parent = SnapshotParents();
+                if (parent.Count == 0) return order;
+                // 逐层展开：每一层收集后立即记录，层序即深度序
+                List<int> level = new List<int>();
+                level.Add(rootPid);
+                HashSet<int> seen = new HashSet<int>();
+                seen.Add(rootPid);
+                for (int depth = 0; depth < 32 && level.Count > 0; depth++)
+                {
+                    List<int> next = new List<int>();
+                    for (int i = 0; i < level.Count; i++)
+                    {
+                        int pid = level[i];
+                        foreach (KeyValuePair<int, int> kv in parent)
+                        {
+                            if (kv.Value != pid) continue;
+                            if (kv.Key <= 4) continue;                 // 跳过 System/Idle 等保护进程
+                            if (!seen.Add(kv.Key)) continue;
+                            next.Add(kv.Key);
+                        }
+                    }
+                    for (int i = 0; i < next.Count; i++) order.Add(next[i]);
+                    level = next;
+                }
+                order.Reverse();                                        // 深层在前
+            }
+            catch (Exception __ex) { Note.Swallow(__ex); }
+            return order;
+        }
+
+        /// <summary>强杀一棵进程树（先子后父）。返回成功终止的进程数；根进程不在其中。</summary>
+        public static int KillProcessTree(int rootPid)
+        {
+            int killed = 0;
+            if (rootPid <= 4) return killed;
+            List<int> kids = DescendantsDeepestFirst(rootPid);
+            for (int i = 0; i < kids.Count; i++)
+            {
+                if (TerminateByPid(kids[i])) killed++;
+            }
+            return killed;
+        }
+
+        /// <summary>按 pid 强杀单个进程（不抛异常，失败返回 false）。</summary>
+        public static bool TerminateByPid(int pid)
+        {
+            if (pid <= 4) return false;
+            IntPtr h = IntPtr.Zero;
+            try
+            {
+                h = OpenProcess(PROCESS_TERMINATE, false, pid);
+                if (h == IntPtr.Zero) return false;
+                return TerminateProcess(h, 1);
+            }
+            catch (Exception __ex) { Note.Swallow(__ex); return false; }
+            finally
+            {
+                if (h != IntPtr.Zero)
+                {
+                    try { CloseHandle(h); } catch (Exception __ex) { Note.Swallow(__ex); }
+                }
+            }
         }
 
         // ---------- 完成提醒 ----------

@@ -242,6 +242,13 @@ namespace Rem.UI
 
                 BuiltArgs args = ArgBuilder.Build(cfg, url, dir, txtName.Text, exe, ff, reLog, resumeTmp, "");
                 currentArgs = args;
+                // P1-1：resume / 上层传进来的临时目录若不归本任务所有，Build 已丢掉它并重建 .parts\<名字>。
+                // 这一步必须让用户看见，否则表现为“明明续传却从头下”，无从判断是缺陷还是设计。
+                if (args.TmpRejected.Length > 0)
+                {
+                    log.Warn(">> 传入的临时目录不属于本次任务，已忽略并重新开始：" + args.TmpRejected);
+                    SetStatus("临时目录非本任务所有，已改为从头下载", Theme.Orange);
+                }
                 txtCmd.Text = MaskPreview(args.CommandLine);
 
                 // 记下本次任务的原始参数：自动补片续跑要用同一份 url / 目录 / 引擎 / 临时目录

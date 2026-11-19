@@ -50,8 +50,8 @@ namespace Rem.UI
         private Label lblUpd;
         private LinkLabel lnkUpdate;
         private LinkLabel lnkClean;
-        // 「诊断日志」入口（重构方案第 4 章 E3）：查看本次会话的内部异常记录
-        private LinkLabel lnkDiag;
+        // 「赞助一下~」入口：替代原「诊断日志」入口（diag.log 降为纯内部落盘，不再对外暴露入口）
+        private LinkLabel lnkSponsor;
         private RichTextBox txtLog;
         private ThinScroll scLog;
         private ThinScroll scCmd;
@@ -224,6 +224,10 @@ namespace Rem.UI
             deferredUpdate = true;
             SetStatus("就绪");
 
+            // 赞助提醒：放到首帧之后异步执行，命中到期才弹（默认每周一次），绝不拖慢窗口出现
+            try { BeginInvoke(new Action(MaybeShowSponsor)); }
+            catch (Exception __ex) { Note.Swallow(__ex); }
+
             // 解密失败的加密字段在 Load 时只能被清空，但不能静默（D15）：明确列出字段名并提示重填
             if (ConfigStore.DecryptFailedFields.Count > 0)
             {
@@ -381,6 +385,8 @@ namespace Rem.UI
                     cfg.HlsIv = f.HlsIv;
                     cfg.LogLimit = f.LogLimit;
                     cfg.PatchPercent = f.PatchPercent;
+                    // 赞助提醒频率（二选一）落盘：存 "week" / "day"，下次启动即按新周期判定，无需改配置文件
+                    cfg.SponsorFreq = Sponsor.NormalizeFreq(f.SponsorFreq);
                     cfg.Clamp();
                     SaveConfig();
                     SetStatus("高级设置已保存");

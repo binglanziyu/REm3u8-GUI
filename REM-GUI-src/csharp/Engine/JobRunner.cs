@@ -168,6 +168,8 @@ namespace Rem.Engine
         private IntPtr job = IntPtr.Zero;
         private Thread thOut;
         private Thread thErr;
+        // Start() 传入的日志器：Stop() 也要写一行「已连带终止 N 个子进程」，故提升为字段
+        private Logger log;
         private readonly object gate = new object();
         private readonly Queue<LineItem> queue = new Queue<LineItem>();
         private volatile bool killed = false;
@@ -205,6 +207,8 @@ namespace Rem.Engine
 
         public bool Start(string exe, BuiltArgs b, string workDir, Logger log)
         {
+            // 参数名与字段同名：显式 this. 赋值，供 Stop() 记录子进程连带终止条数
+            this.log = log;
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = exe;
             psi.Arguments = JoinArgs(b.Args);
@@ -214,11 +218,13 @@ namespace Rem.Engine
             psi.RedirectStandardError = true;
             psi.RedirectStandardInput = true;
             psi.WorkingDirectory = workDir;
-            // 引擎是控制台程序，stdout/stderr 被重定向后按【系统 OEM 代码页】输出（简中 936）。
-            // 早前误用 UTF8 解码，导致日志里中文全成 "����ض���"；日志文件本身是 UTF-8，但管道不是。
-            Encoding outEnc = GetConsoleEncoding();
-            try { psi.StandardOutputEncoding = outEnc; } catch (Exception __ex) { Note.Swallow(__ex); }
-            try { psi.StandardErrorEncoding = outEnc; } catch (Exception __ex) { Note.Swallow(__ex); }
+            // 引擎是控制台程序，stdout/stderr 被重定向后一般按【系统 OEM 代码页】输出（简中 936），
+            // 但不同版本/不同构建也可能直接吐 UTF-8。任何「预先指定一种编码」的做法都会在其中
+            // 一种情况下把中文解成乱码：早前固定 UTF8 → "����ض���"，固定 GBK → "鐜板湪"。
+            // 所以这里不再给 StreamReader 指定编码，而是直接读原始字节流，由 Enc.DecodeLine
+            // 逐行判定「是不是合法 UTF-8」，不是再按 ANSI 解（见 Core\Enc.cs）。
+            // 注意：必须读 .BaseStream —— StandardOutputEncoding 只影响 StreamReader，
+            // 而按行判定的前提是拿到未解码的原始字节。
 
             proc = new Process();
             proc.StartInfo = psi;
@@ -253,8 +259,8 @@ namespace Rem.Engine
 
             // 先取局部 reader 再由闭包捕获：否则 Pump 线程被调度时才解引用 proc 字段，
             // 与 Dispose 的 proc=null 竞态会抛到后台线程，未处理异常直接崩掉整个进程（D4）
-            TextReader stdOut = proc.StandardOutput;
-            TextReader stdErr = proc.StandardError;
+            Stream stdOut = proc.StandardOutput.BaseStream;
+            Stream stdErr = proc.StandardError.BaseStream;
 
             thOut = new Thread(delegate () { Pump(stdOut, false); });
             thOut.IsBackground = true;
@@ -280,28 +286,14 @@ namespace Rem.Engine
             return sb.ToString();
         }
 
-        /// <summary>子控制台进程重定向输出的实际编码：系统 OEM 代码页（简中 936）。</summary>
-        private static Encoding GetConsoleEncoding()
-        {
-            try
-            {
-                int cp = System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
-                if (cp <= 0) cp = 936;
-                return Encoding.GetEncoding(cp);
-            }
-            catch (Exception __ex)
-            {
-                Note.Swallow(__ex);
-                try { return Encoding.Default; }
-                catch (Exception __ex2) { Note.Swallow(__ex2); return new UTF8Encoding(false); }
-            }
-        }
+        //  已废弃：原先在这里按 OEM 代码页给管道指定编码（固定一种编码必然在另一种输出下乱码）。
+        //  现在改由 Enc.DecodeLine 按原始字节逐行判定，保留此注释说明历史成因，避免有人"补回来"。
 
-        private void Pump(TextReader reader, bool isErr)
+        private void Pump(Stream stream, bool isErr)
         {
             try
             {
-                PumpCore(reader, isErr);
+                PumpCore(stream, isErr);
             }
             catch (Exception __ex)
             {
@@ -310,37 +302,52 @@ namespace Rem.Engine
             }
         }
 
-        private void PumpCore(TextReader reader, bool isErr)
+        /// <summary>
+        /// 按字节读取引擎输出并切行：先断言「这行字节是不是合法 UTF-8」，合法按 UTF-8 解，
+        /// 否则按系统 ANSI(OEM) 解，最后统一过 Enc.Repair 兜底（见 Core\Enc.cs）。
+        /// 逐行而不是逐块判定，才能避免整段输出被一个坏字节带偏；
+        /// 行边界只认 0x0A / 0x0D —— UTF-8 与 GBK 的多字节尾字节都不会落到这两个值。
+        /// </summary>
+        private void PumpCore(Stream stream, bool isErr)
         {
-            char[] buf = new char[4096];
-            StringBuilder sb = new StringBuilder();
+            byte[] buf = new byte[4096];
+            byte[] line = new byte[8192];
+            int len = 0;
             while (true)
             {
                 int n;
-                try { n = reader.Read(buf, 0, buf.Length); }
+                try { n = stream.Read(buf, 0, buf.Length); }
                 catch (Exception __ex) { Note.Swallow(__ex); break; }
                 if (n <= 0) break;
                 for (int i = 0; i < n; i++)
                 {
-                    char c = buf[i];
-                    if (c == '\n' || c == '\r')
+                    byte b = buf[i];
+                    if (b == 0x0A || b == 0x0D)
                     {
-                        if (sb.Length > 0)
+                        if (len > 0)
                         {
-                            Push(sb.ToString(), isErr);
-                            sb.Length = 0;
+                            Push(Enc.DecodeLine(line, 0, len), isErr);
+                            len = 0;
                         }
                         continue;
                     }
-                    sb.Append(c);
+                    if (len >= line.Length)
+                    {
+                        byte[] bigger = new byte[line.Length * 2];
+                        Buffer.BlockCopy(line, 0, bigger, 0, line.Length);
+                        line = bigger;
+                    }
+                    line[len++] = b;
                 }
-                if (sb.Length > 8192)
+                // 引擎偶发吐超长单行（无换行的整段 JSON / 大段 m3u8）：到点就先吐出去，
+                // 不能让它把缓冲区涨到爆内存
+                if (len > 65536)
                 {
-                    Push(sb.ToString(), isErr);
-                    sb.Length = 0;
+                    Push(Enc.DecodeLine(line, 0, len), isErr);
+                    len = 0;
                 }
             }
-            if (sb.Length > 0) Push(sb.ToString(), isErr);
+            if (len > 0) Push(Enc.DecodeLine(line, 0, len), isErr);
         }
 
         /// <summary>
@@ -408,9 +415,25 @@ namespace Rem.Engine
             }
         }
 
+        /// <summary>
+        /// 暂停/停止：必须让「引擎 + 它的 ffmpeg 等子进程」整棵树退出。
+        /// 早前只 proc.Kill() 杀引擎本体——混流阶段的 ffmpeg 子进程会被留下，
+        /// 继续占着成品文件与 CPU，且下一次同目录任务会因文件被占用而失败（P1-2）。
+        /// 顺序：Job 对象整组终止 → 快照枚举后代自底向上强杀（Job 未生效时的兜底）→ 杀根进程 → 等回收。
+        /// </summary>
         public void Stop()
         {
             killed = true;
+            int pid = -1;
+            try
+            {
+                if (proc != null)
+                {
+                    try { pid = proc.Id; } catch (Exception __ex) { Note.Swallow(__ex); pid = -1; }
+                }
+            }
+            catch (Exception __ex) { Note.Swallow(__ex); }
+
             try
             {
                 if (job != IntPtr.Zero)
@@ -419,15 +442,33 @@ namespace Rem.Engine
                 }
             }
             catch (Exception __ex) { Note.Swallow(__ex); }
+
+            // 子进程先死：父进程先被杀时，尚未退出的子进程会被过继给 explorer 继续跑
+            int childKilled = 0;
+            if (pid > 0)
+            {
+                try { childKilled = Native.KillProcessTree(pid); }
+                catch (Exception __ex) { Note.Swallow(__ex); }
+            }
+            if (childKilled > 0 && log != null) log.Diag("暂停：已连带终止 " + childKilled + " 个子进程", "Stop");
+
             try
             {
                 if (proc != null && !proc.HasExited) proc.Kill();
+                else if (pid > 0) Native.TerminateByPid(pid);
             }
             catch (Exception __ex) { Note.Swallow(__ex); }
             try
             {
                 // 强杀后给一个短暂的回收窗口，避免后续 HasExited 仍然为假导致收尾逻辑误判
-                if (proc != null && !proc.HasExited) proc.WaitForExit(2000);
+                if (proc != null && !proc.HasExited) proc.WaitForExit(5000);
+            }
+            catch (Exception __ex) { Note.Swallow(__ex); }
+            // 等两个读取线程收尾，确认 ffmpeg/引擎的输出管道都已关闭（不再有残留输出线程挂在旧进程上）
+            try
+            {
+                if (thOut != null) thOut.Join(1500);
+                if (thErr != null) thErr.Join(1500);
             }
             catch (Exception __ex) { Note.Swallow(__ex); }
         }

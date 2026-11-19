@@ -46,9 +46,10 @@ namespace Rem.UI
                     return;
                 }
                 JVal j = JVal.Parse(File.ReadAllText(path, Encoding.UTF8));
-                string url = j.GetStr("url", "");
+                // resume 文件的历史版本可能由乱码文本写出：字段逐个过一遍修复
+                string url = Enc.Repair(j.GetStr("url", ""));
                 string dir = j.GetStr("saveDir", "");
-                string name = j.GetStr("name", "");
+                string name = Enc.Repair(j.GetStr("name", ""));
                 string tmp = j.GetStr("tmp", "");
                 if (url.Length == 0)
                 {
@@ -73,6 +74,19 @@ namespace Rem.UI
                 }
                 // 分片目录不存在或已被清空时不能假装还能续传：明确告知从头下载，
                 // 并把 tmp 置空交给 ArgBuilder 重新生成（否则引擎会在空目录里“续传”出 0 分片）
+                // P1-1：tmp 是纯文本，先校验归属——只有落在本任务 .parts\<名字> 之下才认，
+                // 否则可能把 --tmp-dir 指到无关目录、下载成功后再被 PruneParts 整树删除
+                if (tmp.Length > 0)
+                {
+                    string effDir = dir.Length > 0 ? dir : cfg.SaveDir;
+                    if (!ArgBuilder.OwnedResumeTmp(effDir, name, url, tmp))
+                    {
+                        log.Warn(">> 续传文件里的临时目录不属于本次任务，已忽略并重建：" + tmp);
+                        log.Dim(">> 判定口径：临时目录必须位于 " + Path.Combine(effDir, ".parts") + " 下且与任务名一致");
+                        SetStatus("临时目录异常，已按新任务重建", Theme.Orange);
+                        tmp = "";
+                    }
+                }
                 if (tmp.Length > 0 && !PartsAlive(tmp))
                 {
                     log.Warn(">> 分片已丢失，将从头下载：" + tmp);

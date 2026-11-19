@@ -273,6 +273,14 @@ namespace Rem.UI
             {
                 if (currentArgs == null) return;
                 string nameDir = currentArgs.TmpDir;
+                // P1-1 二次把关：递归删除前再验一次归属。arg 值来自 resume 时即便 Build 已拦过，
+                // 这里再算一遍也几乎零成本，彻底杜绝「删错目录」这种不可逆后果。
+                if (!string.IsNullOrEmpty(nameDir) && Directory.Exists(nameDir)
+                    && !TmpGuard.Owned(currentArgs.SaveDir, currentArgs.SaveName, nameDir))
+                {
+                    log.Diag("跳过分片清理：临时目录不属于本次任务 " + nameDir, "PruneParts");
+                    nameDir = "";
+                }
                 if (!string.IsNullOrEmpty(nameDir) && Directory.Exists(nameDir))
                 {
                     try { Directory.Delete(nameDir, true); }

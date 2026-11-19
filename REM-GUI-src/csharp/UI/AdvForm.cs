@@ -44,6 +44,10 @@ namespace Rem.UI
         // ---- 界面 ----
         public int LogLimit;
 
+        // ---- 赞助提醒频率 ----
+        // 二选一：Sponsor.FreqWeek（每周一次，默认）/ Sponsor.FreqDay（每日一次）
+        public string SponsorFreq;
+
         // ---- 自动补片 ----
         // 补片上限（缺失率 %，1–70，默认 50）：超过该比例才整组放弃补片
         public int PatchPercent;
@@ -68,6 +72,9 @@ namespace Rem.UI
         private CheckBox chkSysProxy;
         private TextBox numLogLimit;
         private TextBox numPatch;
+        // 赞助提醒频率二选一（勾一个自动放开另一个，不允许两个都关）
+        private CheckBox chkFreqWeek;
+        private CheckBox chkFreqDay;
         private string plainProxy;
         private string plainHeaders;
 
@@ -124,6 +131,8 @@ namespace Rem.UI
             ExtraArgs = cfg.ExtraArgs;
             UseSystemProxy = cfg.UseSystemProxy;
             LogLimit = cfg.LogLimit;
+            // 频率非法值一律收敛成默认（每周一次），避免配置被手改成怪值后二选一都是空
+            SponsorFreq = Sponsor.NormalizeFreq(cfg.SponsorFreq);
             PatchPercent = cfg.PatchPercent;
             plainProxy = cfg.Proxy;
             plainHeaders = cfg.Headers;
@@ -230,6 +239,8 @@ namespace Rem.UI
             if (patchPct < AppConfig.PatchPercentMin) patchPct = AppConfig.PatchPercentMin;
             if (patchPct > AppConfig.PatchPercentMax) patchPct = AppConfig.PatchPercentMax;
             PatchPercent = patchPct;
+            // 二选一：以「每日一次」是否勾选为准，勾了就 day，否则 week（两个都没勾按默认 week）
+            SponsorFreq = (chkFreqDay != null && chkFreqDay.Checked) ? Sponsor.FreqDay : Sponsor.FreqWeek;
             DialogResult = DialogResult.OK;
             Close();
         }
