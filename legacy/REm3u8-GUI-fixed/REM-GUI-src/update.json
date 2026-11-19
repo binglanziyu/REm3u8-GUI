@@ -1,0 +1,16 @@
+﻿{
+    "version":  "3.0.1",
+    "notes":  "修复进度读数与假成功判定，完成提醒增强",
+    "engine":  {
+                   "repo":  "nilaoda/N_m3u8DL-RE",
+                   "assetHint":  "win-x64",
+                   "mirrors":  [
+                                   "",
+                                   "https://gh-proxy.com/"
+                               ]
+               },
+    "self":  {
+                 "repo":  "binglanziyu/REm3u8-GUI",
+                 "assetHint":  "REM-GUI.exe"
+             }
+}

@@ -1,0 +1,541 @@
+diff --git a/REM-GUI-src/csharp/Core/Json.cs b/REM-GUI-src/csharp/Core/Json.cs
+index fc840c3..a7a89a0 100644
+--- a/REM-GUI-src/csharp/Core/Json.cs
++++ b/REM-GUI-src/csharp/Core/Json.cs
+@@ -162,12 +162,18 @@ namespace Rem.Core
+         public string ToJson()
+         {
+             StringBuilder sb = new StringBuilder();
+-            Write(sb);
++            Write(sb, 0);
+             return sb.ToString();
+         }
+ 
+-        private void Write(StringBuilder sb)
++        // 递归深度上限：恶意/畸形深层嵌套（如 [[[[…]]]]）会打爆线程栈，
++        // 而 StackOverflowException 在 .NET Framework 上不可捕获、进程直接终止，
++        // 必须在递归入口截断。解析与序列化共用同一上限（D-JSON-1）
++        private const int MaxDepth = 256;
++
++        private void Write(StringBuilder sb, int depth)
+         {
++            if (depth > MaxDepth) { sb.Append("null"); return; }
+             switch (Kind)
+             {
+                 case JKind.Null:
+@@ -196,7 +202,7 @@ namespace Rem.Core
+                         for (int i = 0; i < Arr.Count; i++)
+                         {
+                             if (i > 0) sb.Append(',');
+-                            if (Arr[i] == null) sb.Append("null"); else Arr[i].Write(sb);
++                            if (Arr[i] == null) sb.Append("null"); else Arr[i].Write(sb, depth + 1);
+                         }
+                     }
+                     sb.Append(']');
+@@ -212,7 +218,7 @@ namespace Rem.Core
+                             first = false;
+                             WriteStr(sb, kv.Key);
+                             sb.Append(':');
+-                            if (kv.Value == null) sb.Append("null"); else kv.Value.Write(sb);
++                            if (kv.Value == null) sb.Append("null"); else kv.Value.Write(sb, depth + 1);
+                         }
+                     }
+                     sb.Append('}');
+@@ -258,7 +264,7 @@ namespace Rem.Core
+         {
+             if (text == null) return Null();
+             int i = 0;
+-            JVal v = ParseValue(text, ref i);
++            JVal v = ParseValue(text, ref i, 0);
+             return v == null ? Null() : v;
+         }
+ 
+@@ -272,13 +278,15 @@ namespace Rem.Core
+             }
+         }
+ 
+-        private static JVal ParseValue(string t, ref int i)
++        private static JVal ParseValue(string t, ref int i, int depth)
+         {
++            // 深度截断：超限按 null 处理，绝不继续递归（D-JSON-1）
++            if (depth > MaxDepth) return Null();
+             SkipWs(t, ref i);
+             if (i >= t.Length) return Null();
+             char c = t[i];
+-            if (c == '{') return ParseObject(t, ref i);
+-            if (c == '[') return ParseArray(t, ref i);
++            if (c == '{') return ParseObject(t, ref i, depth + 1);
++            if (c == '[') return ParseArray(t, ref i, depth + 1);
+             if (c == '"') return Of(ParseString(t, ref i));
+             if (c == 't' && i + 3 < t.Length && t.Substring(i, 4) == "true") { i += 4; return Of(true); }
+             if (c == 'f' && i + 4 < t.Length && t.Substring(i, 5) == "false") { i += 5; return Of(false); }
+@@ -291,7 +299,7 @@ namespace Rem.Core
+             return num;
+         }
+ 
+-        private static JVal ParseObject(string t, ref int i)
++        private static JVal ParseObject(string t, ref int i, int depth)
+         {
+             JVal o = NewObj();
+             i++; // {
+@@ -305,7 +313,7 @@ namespace Rem.Core
+                 string key = ParseString(t, ref i);
+                 SkipWs(t, ref i);
+                 if (i < t.Length && t[i] == ':') i++;
+-                JVal v = ParseValue(t, ref i);
++                JVal v = ParseValue(t, ref i, depth);
+                 o.Set(key, v);
+                 // 游标停滞保护：一整轮没有前进说明遇上了解析不了的畸形片段，
+                 // 直接结束并返回已解析部分，绝不让主线程卡在这（D2）
+@@ -314,7 +322,7 @@ namespace Rem.Core
+             return o;
+         }
+ 
+-        private static JVal ParseArray(string t, ref int i)
++        private static JVal ParseArray(string t, ref int i, int depth)
+         {
+             JVal a = NewArr();
+             i++; // [
+@@ -325,7 +333,7 @@ namespace Rem.Core
+                 if (i >= t.Length) break;
+                 if (t[i] == ']') { i++; break; }
+                 if (t[i] == ',') { i++; continue; }
+-                a.Add(ParseValue(t, ref i));
++                a.Add(ParseValue(t, ref i, depth));
+                 if (i <= loopStart) { i = t.Length; break; }
+             }
+             return a;
+diff --git a/REM-GUI-src/csharp/Core/Text.cs b/REM-GUI-src/csharp/Core/Text.cs
+index b3a863b..59ef291 100644
+--- a/REM-GUI-src/csharp/Core/Text.cs
++++ b/REM-GUI-src/csharp/Core/Text.cs
+@@ -84,17 +84,19 @@ namespace Rem.Core
+     /// <summary>凭证掩码：命令预览、Header 展示一律不出现明文。</summary>
+     public static class Mask
+     {
++        // 掩码正则全部带 matchTimeout：输入里混有引擎输出/用户文本，
++        // 无超时的正则出问题会永久挂死而不是抛异常；超时会走 Secret 的 fail-closed 兜底（D-MASK-1）
+         private static readonly Regex RxHead = new Regex(
+             "(?i)(Cookie|Authorization|Proxy-Authorization|X-[A-Za-z0-9\\-_]*(?:Token|Key|Auth|Sign)[A-Za-z0-9\\-_]*)\\s*:\\s*[^\"\\r\\n]*",
+-            RegexOptions.Compiled);
+-        private static readonly Regex RxUserInfo = new Regex("(?i)([a-z0-9+]+://)[^/\\s@\"]+@", RegexOptions.Compiled);
++            RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
++        private static readonly Regex RxUserInfo = new Regex("(?i)([a-z0-9+]+://)[^/\\s@\"]+@", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+         private static readonly Regex RxQuery = new Regex(
+-            "(?i)([?&](?:token|sign|signature|auth|auth_key|key|wsSecret|wsTime|expires)=)[^&\\s\"]+", RegexOptions.Compiled);
++            "(?i)([?&](?:token|sign|signature|auth|auth_key|key|wsSecret|wsTime|expires)=)[^&\\s\"]+", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+         // 命令行里的解密密钥：--custom-hls-key / --custom-hls-iv 后面那一段一律打码，
+         // 否则命令预览和日志里会把用户手填的 KEY 明文带出去。
+         // 解密方式固定 AES_128、--key（KID:KEY 多组）能力已整体移除，规则里不再有 --key 分支
+         private static readonly Regex RxArgKey = new Regex(
+-            "(?i)(--(?:custom-hls-key|custom-hls-iv)\\s+)(\"[^\"]*\"|[^\\s\"]+)", RegexOptions.Compiled);
++            "(?i)(--(?:custom-hls-key|custom-hls-iv)\\s+)(\"[^\"]*\"|[^\\s\"]+)", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+ 
+         public static string Secret(string text)
+         {
+@@ -107,9 +109,11 @@ namespace Rem.Core
+                 t = RxQuery.Replace(t, "$1****");
+                 t = RxArgKey.Replace(t, "$1****");
+             }
+-            catch (Exception)
++            catch (Exception __ex)
+             {
+-                return text;
++                // 打码失败必须 fail-closed：宁可整段退化成 ****，也绝不把未打码明文送出去（D-MASK-1）
++                Note.Swallow("Text.cs:Mask.Secret", __ex);
++                return "****";
+             }
+             return t;
+         }
+@@ -346,7 +350,8 @@ namespace Rem.Core
+             return StartsWith(path, PK0, PK1);
+         }
+ 
+-        /// <summary>移动并覆盖目标：同卷用 Replace 保证原子性，跨卷退回 Move。</summary>
++        /// <summary>移动并覆盖目标：同卷用 Replace 保证原子性；Replace 失败时先把旧目标暂存旁路，
++        /// 换入失败再还原旧目标——绝不出现「旧的已删、新的没上来」的目标丢失窗口（D-FS-1）。</summary>
+         public static bool MoveAtomic(string src, string dst)
+         {
+             try
+@@ -361,7 +366,29 @@ namespace Rem.Core
+                     }
+                     catch (Exception)
+                     {
+-                        File.Delete(dst);
++                        // Replace 不可用（跨卷/占用等）：旧目标移旁路 → 换入 → 成功后删旁路，失败则还原
++                        string bak = dst + ".old";
++                        TryDeleteFile(bak);
++                        try
++                        {
++                            File.Move(dst, bak);
++                        }
++                        catch (Exception)
++                        {
++                            return false; // 旧目标动不了：保持原状退出，绝不先删
++                        }
++                        try
++                        {
++                            File.Move(src, dst);
++                        }
++                        catch (Exception __ex)
++                        {
++                            Note.Swallow("Text.cs:MoveAtomic.restore", __ex);
++                            try { File.Move(bak, dst); } catch (Exception __ex2) { Note.Swallow("Text.cs:MoveAtomic.rollback", __ex2); }
++                            return false;
++                        }
++                        TryDeleteFile(bak);
++                        return true;
+                     }
+                 }
+                 File.Move(src, dst);
+diff --git a/REM-GUI-src/csharp/Engine/JobRunner.cs b/REM-GUI-src/csharp/Engine/JobRunner.cs
+index f5f15b7..b9dd0d3 100644
+--- a/REM-GUI-src/csharp/Engine/JobRunner.cs
++++ b/REM-GUI-src/csharp/Engine/JobRunner.cs
+@@ -251,12 +251,17 @@ namespace Rem.Engine
+                 if (!ok && log != null) log.Diag("AssignProcessToJobObject 失败", "JobRunner");
+             }
+ 
+-            thOut = new Thread(delegate () { Pump(proc.StandardOutput, false); });
++            // 先取局部 reader 再由闭包捕获：否则 Pump 线程被调度时才解引用 proc 字段，
++            // 与 Dispose 的 proc=null 竞态会抛到后台线程，未处理异常直接崩掉整个进程（D4）
++            TextReader stdOut = proc.StandardOutput;
++            TextReader stdErr = proc.StandardError;
++
++            thOut = new Thread(delegate () { Pump(stdOut, false); });
+             thOut.IsBackground = true;
+             thOut.Name = "re-stdout";
+             thOut.Start();
+ 
+-            thErr = new Thread(delegate () { Pump(proc.StandardError, true); });
++            thErr = new Thread(delegate () { Pump(stdErr, true); });
+             thErr.IsBackground = true;
+             thErr.Name = "re-stderr";
+             thErr.Start();
+@@ -292,6 +297,19 @@ namespace Rem.Engine
+         }
+ 
+         private void Pump(TextReader reader, bool isErr)
++        {
++            try
++            {
++                PumpCore(reader, isErr);
++            }
++            catch (Exception __ex)
++            {
++                // 泵线程的任何未处理异常都会终止整个进程（net48 默认策略），必须兜底留痕（D4）
++                Note.Swallow("JobRunner.cs:Pump", __ex);
++            }
++        }
++
++        private void PumpCore(TextReader reader, bool isErr)
+         {
+             char[] buf = new char[4096];
+             StringBuilder sb = new StringBuilder();
+diff --git a/REM-GUI-src/csharp/Services/EngineManager.cs b/REM-GUI-src/csharp/Services/EngineManager.cs
+index 1d0c677..9f08042 100644
+--- a/REM-GUI-src/csharp/Services/EngineManager.cs
++++ b/REM-GUI-src/csharp/Services/EngineManager.cs
+@@ -144,7 +144,15 @@ namespace Rem.Services
+             {
+                 if (!Directory.Exists(tmpDir)) Directory.CreateDirectory(tmpDir);
+                 string tagName = Ver.Normalize(tag);
+-                if (tagName.Length == 0) tagName = DateTime.Now.ToString("yyyyMMddHHmmss");
++                // tag 来自远端清单/API，最终要拼进安装路径：先文件名合法化剔除分隔符与 ".."，
++                // 再断言不含任何路径成分，不满足就回退时间戳，杜绝路径穿越（D-EM-1）
++                tagName = Safe.FileName(tagName);
++                if (tagName.Length == 0 || tagName == "." || tagName == ".." ||
++                    tagName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
++                    !string.Equals(Path.GetFileName(tagName), tagName, StringComparison.Ordinal))
++                {
++                    tagName = DateTime.Now.ToString("yyyyMMddHHmmss");
++                }
+                 string zip = Path.Combine(tmpDir, "engine_" + tagName + ".zip");
+ 
+                 if (log != null) log.Info(">> 正在下载引擎 " + Ver.Display(tagName) + " …");
+@@ -178,7 +186,8 @@ namespace Rem.Services
+                 if (!Directory.Exists(target)) Directory.CreateDirectory(target);
+ 
+                 string exeInZip = "";
+-                if (Fs.IsZip(zip))
++                // zip（PK）或 tar.gz（gzip 1f 8b）走解压；其余才按直链 exe 处理（D-EM-2）
++                if (Fs.IsZip(zip) || Fs.StartsWith(zip, 0x1f, 0x8b))
+                 {
+                     if (log != null) log.Info(">> 正在解压 …");
+                     ArchiveExtract(zip, target, out exeInZip);
+@@ -303,37 +312,53 @@ namespace Rem.Services
+ 
+                 using (ZipArchive ar = ZipFile.OpenRead(zip))
+                 {
++                    long totalBytes = 0;
+                     for (int i = 0; i < ar.Entries.Count; i++)
+                     {
+                         ZipArchiveEntry en = ar.Entries[i];
+-                        string rel = en.FullName.Replace('/', Path.DirectorySeparatorChar);
+-                        if (rel.Length == 0) continue;
+-                        string dest = Path.GetFullPath(Path.Combine(root, rel));
+-                        if (!dest.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;   // Zip Slip 拦截
++                        try
++                        {
++                            // 解压总量上限：防 zip bomb（声明几 KB、展开几十 GB 把磁盘写满）；
++                            // 超限中止后由“未找到引擎”错误对外可见（D-EM-2）
++                            totalBytes += en.Length;
++                            if (totalBytes > 2L * 1024 * 1024 * 1024) break;
++                            string rel = en.FullName.Replace('/', Path.DirectorySeparatorChar);
++                            if (rel.Length == 0) continue;
++                            string dest = Path.GetFullPath(Path.Combine(root, rel));
++                            if (!dest.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;   // Zip Slip 拦截
+ 
+-                        bool isDir = rel.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal) ||
+-                                     en.Name.Length == 0;
+-                        if (isDir)
++                            bool isDir = rel.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal) ||
++                                         en.Name.Length == 0;
++                            if (isDir)
++                            {
++                                if (!Directory.Exists(dest)) Directory.CreateDirectory(dest);
++                                continue;
++                            }
++                            string parent = Path.GetDirectoryName(dest);
++                            if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent)) Directory.CreateDirectory(parent);
++                            Fs.TryDeleteFile(dest);
++                            en.ExtractToFile(dest, true);
++                        }
++                        catch (Exception __ex)
+                         {
+-                            if (!Directory.Exists(dest)) Directory.CreateDirectory(dest);
+-                            continue;
++                            // 单个坏条目跳过继续：若让异常把整个 zip 打回 tar 兜底，
++                            // 等于把上面的 Zip Slip 校验绕过（D-EM-2）
++                            Note.Swallow("EngineManager.cs:ArchiveExtract.entry", __ex);
+                         }
+-                        string parent = Path.GetDirectoryName(dest);
+-                        if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent)) Directory.CreateDirectory(parent);
+-                        Fs.TryDeleteFile(dest);
+-                        en.ExtractToFile(dest, true);
+                     }
+                 }
+                 exePath = FindFirst(root, AppPaths.ReName, 0);
+             }
+-            catch (Exception)
++            catch (Exception __ex)
+             {
+-                // zip 解析失败 → 下面用 tar 再试一次
++                // zip 容器整体解析失败：是否走 tar 兜底由下面的魔数判断决定（D-EM-2）
++                Note.Swallow("EngineManager.cs:ArchiveExtract.zip", __ex);
+             }
+ 
+-            if (exePath.Length == 0)
++            if (exePath.Length == 0 && Fs.StartsWith(zip, 0x1f, 0x8b))
+             {
+-                // 有些发布包是 tar.gz 改名，交给系统 tar
++                // 仅限真正的 tar.gz（gzip 魔数 1f 8b）才交给系统 tar。
++                // Windows 自带 tar 能直接读 zip——对 zip 兜底等于把应用层 Zip Slip 校验整个绕过（D-EM-2）
+                 try
+                 {
+                     ProcessStartInfo psi = new ProcessStartInfo();
+diff --git a/REM-GUI-src/csharp/Services/Http.cs b/REM-GUI-src/csharp/Services/Http.cs
+index 6f9e957..e483b0f 100644
+--- a/REM-GUI-src/csharp/Services/Http.cs
++++ b/REM-GUI-src/csharp/Services/Http.cs
+@@ -71,6 +71,13 @@ namespace Rem.Services
+         }
+ 
+         public static string GetText(string url, AppConfig cfg, int timeoutMs, out int status, out long elapsedMs)
++        {
++            return GetText(url, cfg, timeoutMs, 0, out status, out elapsedMs);
++        }
++
++        /// <summary>读取文本响应。maxChars &gt; 0 时最多读该字符数即停，
++        /// 防止预检碰到直链大文件时把整个响应体读进内存（D-HTTP-1）。</summary>
++        public static string GetText(string url, AppConfig cfg, int timeoutMs, int maxChars, out int status, out long elapsedMs)
+         {
+             status = 0;
+             Stopwatch sw = Stopwatch.StartNew();
+@@ -84,7 +91,25 @@ namespace Rem.Services
+                     using (Stream s = resp.GetResponseStream())
+                     using (StreamReader sr = new StreamReader(s, Encoding.UTF8, true))
+                     {
+-                        string text = sr.ReadToEnd();
++                        string text;
++                        if (maxChars <= 0)
++                        {
++                            text = sr.ReadToEnd();
++                        }
++                        else
++                        {
++                            char[] cbuf = new char[8192];
++                            StringBuilder sb = new StringBuilder();
++                            while (sb.Length < maxChars)
++                            {
++                                int want = cbuf.Length;
++                                if (maxChars - sb.Length < want) want = maxChars - sb.Length;
++                                int n = sr.Read(cbuf, 0, want);
++                                if (n <= 0) break;
++                                sb.Append(cbuf, 0, n);
++                            }
++                            text = sb.ToString();
++                        }
+                         sw.Stop();
+                         elapsedMs = sw.ElapsedMilliseconds;
+                         return text;
+diff --git a/REM-GUI-src/csharp/Services/Prechecker.cs b/REM-GUI-src/csharp/Services/Prechecker.cs
+index 947ad7b..a84dd0a 100644
+--- a/REM-GUI-src/csharp/Services/Prechecker.cs
++++ b/REM-GUI-src/csharp/Services/Prechecker.cs
+@@ -83,7 +83,9 @@ namespace Rem.Services
+ 
+             int status;
+             long ms;
+-            string text = Http.GetText(url, cfg, 15000, out status, out ms);
++            // 只读前 256KB：预检只需要判断“是不是 HLS 清单/解析 master”，
++            // 不限量会把直链 mp4 等大文件整包读成 string 直接 OOM（D-HTTP-1）
++            string text = Http.GetText(url, cfg, 15000, 262144, out status, out ms);
+ 
+             if (text == null)
+             {
+diff --git a/REM-GUI-src/csharp/UI/MainForm.Log.cs b/REM-GUI-src/csharp/UI/MainForm.Log.cs
+index 4dcc908..57a41b8 100644
+--- a/REM-GUI-src/csharp/UI/MainForm.Log.cs
++++ b/REM-GUI-src/csharp/UI/MainForm.Log.cs
+@@ -18,8 +18,14 @@ namespace Rem.UI
+ {
+     public sealed partial class MainForm : Form
+     {
++        // 日志渲染积压：每拍最多渲染 LogFlushPerTick 行，余量留到下一拍继续，
++        // 防止 UI 卡顿恢复后一次性灌入上万行把 RTF 解析打满、反而继续恶化积压（D-LOG-1）
++        private const int LogFlushPerTick = 300;
++        private readonly List<LogItem> logBacklog = new List<LogItem>();
++
+         private void ClearLog()
+         {
++            logBacklog.Clear();
+             txtLog.Clear();
+             logLines = 0;
+         }
+@@ -132,24 +138,33 @@ namespace Rem.UI
+         private void FlushLog()
+         {
+             if (txtLog == null || txtLog.IsDisposed) return;
+-            List<LogItem> items = log.Drain();
+-            if (items == null) return;
++            if (logBacklog.Count == 0)
++            {
++                List<LogItem> items = log.Drain();
++                if (items == null) return;
++                logBacklog.AddRange(items);
++            }
++            if (logBacklog.Count == 0) return;
++
++            int take = logBacklog.Count;
++            if (take > LogFlushPerTick) take = LogFlushPerTick;
+ 
+             bool nearBottom = IsNearBottom();
+             Native.SetRedraw(txtLog.Handle, false);
+             txtLog.SuspendLayout();
+             try
+             {
+-                for (int i = 0; i < items.Count; i++)
++                for (int i = 0; i < take; i++)
+                 {
+                     txtLog.SelectionStart = txtLog.TextLength;
+                     txtLog.SelectionLength = 0;
+-                    txtLog.SelectionColor = items[i].Argb == Colors.Default
++                    txtLog.SelectionColor = logBacklog[i].Argb == Colors.Default
+                         ? Color.FromArgb(214, 216, 220)
+-                        : Color.FromArgb(items[i].Argb);
+-                    txtLog.AppendText(items[i].Text + "\n");
++                        : Color.FromArgb(logBacklog[i].Argb);
++                    txtLog.AppendText(logBacklog[i].Text + "\n");
+                     logLines++;
+                 }
++                logBacklog.RemoveRange(0, take);
+                 TrimLog();
+             }
+             finally
+@@ -173,9 +188,11 @@ namespace Rem.UI
+         private void TrimLog()
+         {
+             // 上限取自配置（LogLimit 为字符数，0 或负数时回落到 20 万字符）
++            // 触发阈值放宽到 max + max/2：裁剪是 O(全文) 的 RTF 重排，
++            // 按 2 万一裁频率太高（每 2 万新字符就重排一次全量缓冲）（D-LOG-1）
+             int max = cfg != null && cfg.LogLimit > 0 ? cfg.LogLimit : 200000;
+             int len = txtLog.TextLength;
+-            if (len <= max + 20000) return;
++            if (len <= max + max / 2) return;
+             int cutAt = len - max;
+             int line = txtLog.GetLineFromCharIndex(cutAt);
+             int cut = txtLog.GetFirstCharIndexFromLine(line);
+diff --git a/REM-GUI-src/csharp/UI/MainForm.cs b/REM-GUI-src/csharp/UI/MainForm.cs
+index db518e5..2f871fa 100644
+--- a/REM-GUI-src/csharp/UI/MainForm.cs
++++ b/REM-GUI-src/csharp/UI/MainForm.cs
+@@ -897,20 +897,29 @@ namespace Rem.UI
+                     string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                     if (files == null || files.Length == 0) return;
+                     string first = files[0];
+-                    if (first.EndsWith(".json", StringComparison.OrdinalIgnoreCase) &&
+-                        first.EndsWith(".resume.json", StringComparison.OrdinalIgnoreCase))
++                    // 只认 .resume.json 续传文件（此前的 ".json &&" 是死条件，普通 .json 会掉进读取分支）（D-UI-1）
++                    if (first.EndsWith(".resume.json", StringComparison.OrdinalIgnoreCase))
+                     {
+                         LoadResumeFile(first);
+                         return;
+                     }
+-                    string text = "";
+-                    try { text = File.ReadAllText(first, Encoding.UTF8); } catch (Exception __ex) { Note.Swallow("MainForm.cs:1442", __ex); }
++                    if (Directory.Exists(first))
++                    {
++                        SetStatus("不支持拖入文件夹，请拖入 m3u8 / mpd / txt 文件，或直接粘贴链接");
++                        return;
++                    }
++                    // 限长读取：拖入的可能是视频/日志等大文件，全量读进字符串会冻结界面甚至 OOM（D-UI-1）
++                    string text = ReadHeadText(first, 65536);
+                     string url = Safe.UrlFirst(text);
+                     if (url.Length > 0)
+                     {
+                         txtUrl.Text = url;
+                         SetStatus("已从文件取到链接");
+                     }
++                    else
++                    {
++                        SetStatus("文件里没有找到链接");
++                    }
+                     return;
+                 }
+                 if (e.Data.GetDataPresent(DataFormats.Text))
+@@ -930,6 +939,34 @@ namespace Rem.UI
+             }
+         }
+ 
++        /// <summary>限长读取文本开头（最多 maxChars 字符）：拖入文件取链接只需前缀，
++        /// 绝不把大文件全量读进内存（D-UI-1）。</summary>
++        private static string ReadHeadText(string path, int maxChars)
++        {
++            try
++            {
++                using (StreamReader sr = new StreamReader(path, Encoding.UTF8, true))
++                {
++                    char[] buf = new char[8192];
++                    StringBuilder sb = new StringBuilder();
++                    while (sb.Length < maxChars)
++                    {
++                        int want = buf.Length;
++                        if (maxChars - sb.Length < want) want = maxChars - sb.Length;
++                        int n = sr.Read(buf, 0, want);
++                        if (n <= 0) break;
++                        sb.Append(buf, 0, n);
++                    }
++                    return sb.ToString();
++                }
++            }
++            catch (Exception __ex)
++            {
++                Note.Swallow("MainForm.cs:ReadHeadText", __ex);
++                return "";
++            }
++        }
++
+         // ========================= 更新 =========================
+         // ========================= 收尾 =========================
+         private void SaveConfig()
