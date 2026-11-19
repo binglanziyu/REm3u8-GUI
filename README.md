@@ -74,13 +74,14 @@ REm3u8-GUI 是 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) 的 Windows
 
 | 版本 | 文件 | 大小 | 形态 |
 |:--|:--|:--|:--|
+| v3.1.2 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.2/REM-GUI.exe) | 24.00 MB | 单文件免安装，引擎与 FFmpeg 已内置（修复解密失败误判、403 鉴权失效前置识别、续传前 token 时效探活，补片可命中残片） |
 | v3.1.1 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.1/REM-GUI.exe) | 24.00 MB | 单文件免安装，引擎与 FFmpeg 已内置（修复高级设置多行输入框的白色原生滚动条，长 URL 与长参数改为自动折行） |
 | v3.1.0 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.0/REM-GUI.exe) | 24.00 MB | 单文件免安装，引擎与 FFmpeg 已内置（新增暂停与继续、可调补片上限、诊断日志入口，修复十余项缺陷） |
 | v3.0.1 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.1/REM-GUI.exe) | 23.99 MB | 单文件免安装，引擎与 FFmpeg 已内置（修复进度读数误判、失败误判成功、完成提醒增强） |
 | v3.0.0 | [REM-GUI.exe](https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.0.0/REM-GUI.exe) | 23.98 MB | 单文件免安装，引擎与 FFmpeg 已内置 |
 
-- 直链（复制到下载工具即可）：`https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.1/REM-GUI.exe`
-- 全部版本与更新记录见 [Releases](https://github.com/binglanziyu/REm3u8-GUI/releases)。国内访问慢可走 [ghproxy 镜像](https://ghproxy.net/https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.1/REM-GUI.exe)。
+- 直链（复制到下载工具即可）：`https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.2/REM-GUI.exe`
+- 全部版本与更新记录见 [Releases](https://github.com/binglanziyu/REm3u8-GUI/releases)。国内访问慢可走 [ghproxy 镜像](https://ghproxy.net/https://github.com/binglanziyu/REm3u8-GUI/releases/download/v3.1.2/REM-GUI.exe)。
 - 免安装、免 .NET SDK、免额外附件：双击即用，配置与日志写在程序目录。仅支持 Windows 10 / 11，需要 .NET Framework 4.8（系统自带）。
 
 ## 快速开始
